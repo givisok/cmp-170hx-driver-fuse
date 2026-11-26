@@ -21,3 +21,21 @@ GPU2 [NVIDIA A100 80GB PCIe] SMs=106 mem=79GiB matmul=5.14ms (214.0 TFLOPS) smal
 #    для сравнения, лог 2026-11-26 в «медленном» состоянии (среднее по 10-секундному окну,
 #    1 запрос): Avg generation throughput: 38.7 tokens/s  — методика другая, прямое
 #    сравнение приблизительное.
+
+## Память на CMP-паре после cmp_lmr=0x28b (2026-11-27 02:26), memtest.py: 74 GiB паттернами на карту
+GPU0 [NVIDIA CMP 170HX] SMs=112 total=79.30 GiB -> memtest PASS (write 0.9s, verify 1.0s)
+GPU1 [NVIDIA CMP 170HX] SMs=106 total=79.30 GiB -> memtest PASS
+GPU2 [NVIDIA A100 80GB PCIe] SMs=106 total=79.30 GiB -> memtest PASS
+# до: CMP-пара total=63 GiB (pma_total=0xfd9490000), A100 79 GiB
+
+## SM-замер в той же конфигурации
+GPU0 [NVIDIA CMP 170HX] SMs=112 mem=79GiB matmul=5.15ms (213.4 TFLOPS) smallkernel=10.4us
+GPU1 [NVIDIA CMP 170HX] SMs=106 mem=79GiB matmul=5.12ms (214.7 TFLOPS) smallkernel=10.5us
+GPU2 [NVIDIA A100 80GB PCIe] SMs=106 mem=79GiB matmul=5.12ms (214.7 TFLOPS) smallkernel=11.0us
+
+## vLLM (qwen3.8, PP=3), журнал контейнера, до и после cmp_lmr=0x28b
+#  до (2026-11-27 01:20 MSK): CMP-рэнки «Free memory (62.7/63.4 GiB)», utilization 60.23 GiB
+#     GPU KV cache size: 5,885,609 tokens, Maximum concurrency 5.61x
+#  после (2026-11-27 02:35 MSK): все рэнки «Free memory (78.6/79.3 GiB)», 75.33 GiB
+    GPU KV cache size: 8,141,786 tokens, Maximum concurrency 7.76x      (+38% KV-кэша)
+#  одиночный запрос после: 512 токенов за 5.62 s -> 91 tok/s

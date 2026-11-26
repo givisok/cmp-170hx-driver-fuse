@@ -1,0 +1,26 @@
+# Журнал загрузки 2026-11-27 02:29 MSK (pve, ядро 7.0.14-29-z2p-pve, nvidia.ko 615.71.09 +
+# cmpunlocker). options nvidia cmp_a100_ss=1 cmp_lmr=0x28b. CMP-пара (GPU0 05:00.0, GPU1 06:00.0)
+# получает LOCAL_MEMORY_RANGE = 80 GiB, A100-карта (GPU2 09:00.0) идёт своим путём cmp_a100_ss.
+# journalctl -b -k, обрезано до ключевого. 'Booter failed ... 0x31' после каждого payload — норма.
+
+[   11.890043] pve kernel: NVRM: GPU0 _kgspBootGspRm: SEC2_DEBUG: WPR meta fbSize=0x0000000280000000 wprEnd=0x000000027ff00000 heapSize=0x0000000006900000
+[   12.294133] pve kernel: NVRM: GPU0 _kgspBootGspRm: SEC2_DEBUG: POST-WRITE SS0=0x88888888 SS1=0x00000008 CFG1=0x02779000 LMR=0x0000028b (devId=0x20c2) stock CFG1=0x02449000 LMR=0x00000288
+[   13.123216] pve kernel: NVRM: GPU0 _kgspBootGspRm: SEC2_DEBUG: WPR meta updated fbSize=0x0000001400000000 wprStart=0x00000013f7800000 wprEnd=0x00000013fff00000 heapOffset=0x00000013f7900000 heapSize=0x0000000007000000
+[   13.175068] pve kernel: NVRM: GPU0 kgspBootstrap_TU102: SEC2_DEBUG: normal BooterLoad status=0x0 WPR2=0x13f78000/0x13fee00
+[   13.317061] pve kernel: NVRM: GPU1 _kgspBootGspRm: SEC2_DEBUG: WPR meta fbSize=0x0000000280000000 wprEnd=0x000000027ff00000 heapSize=0x0000000006900000
+[   13.723155] pve kernel: NVRM: GPU1 _kgspBootGspRm: SEC2_DEBUG: POST-WRITE SS0=0x88888888 SS1=0x00000008 CFG1=0x02779000 LMR=0x0000028b (devId=0x20c2) stock CFG1=0x02449000 LMR=0x00000288
+[   14.560197] pve kernel: NVRM: GPU1 _kgspBootGspRm: SEC2_DEBUG: WPR meta updated fbSize=0x0000001400000000 wprStart=0x00000013f7800000 wprEnd=0x00000013fff00000 heapOffset=0x00000013f7900000 heapSize=0x0000000007000000
+[   14.612035] pve kernel: NVRM: GPU1 kgspBootstrap_TU102: SEC2_DEBUG: normal BooterLoad status=0x0 WPR2=0x13f78000/0x13fee00
+[   15.220038] pve kernel: NVRM: GPU0 memmgrCreateHeap_IMPL: SEC2_DEBUG_HEAP: fbAddrSpace=81920MB mapRam=0MB fbTotal=81920MB fbUsable=0x13e05e0000 heapTotal=0x1400000000 regionBytes=0x1400000000 publicBytes=0x13d30f0000 numRegions=7
+[   15.302249] pve kernel: NVRM: GPU0 RmInitAdapter: SEC2_DEBUG: late PMA extension status=0x0
+[   15.341037] pve kernel: NVRM: GPU1 memmgrCreateHeap_IMPL: SEC2_DEBUG_HEAP: fbAddrSpace=81920MB mapRam=0MB fbTotal=81920MB fbUsable=0x13e05e0000 heapTotal=0x1400000000 regionBytes=0x1400000000 publicBytes=0x13d30f0000 numRegions=7
+[   15.422245] pve kernel: NVRM: GPU1 RmInitAdapter: SEC2_DEBUG: late PMA extension status=0x0
+[   30.370070] pve kernel: NVRM: GPU2 _kgspBootGspRm: SEC2_DEBUG: WPR meta fbSize=0x0000001400000000 wprEnd=0x00000013fff00000 heapSize=0x0000000007000000
+[   30.460166] pve kernel: NVRM: GPU2 _kgspBootGspRm: SEC2_DEBUG: A100 SS unlock SS0 0x00000000->0x88888888 SS1 0x00000000->0x00000008
+[   30.460183] pve kernel: NVRM: GPU2 _kgspBootGspRm: SEC2_DEBUG: A100 WPR meta updated fbSize=0x0000001400000000 wprStart=0x00000013f7800000 wprEnd=0x00000013fff00000 heapOffset=0x00000013f7900000 heapSize=0x0000000007000000 WPR2=0x1ffffe00/0x00000000
+[   30.510060] pve kernel: NVRM: GPU2 kgspBootstrap_TU102: SEC2_DEBUG: normal BooterLoad status=0x0 WPR2=0x13f78000/0x13fee00
+
+# Для сравнения — до фикса (2026-11-27 01:16, cmp_lmr = -1):
+#  WPR meta updated fbSize=0x0000001000000000 wprStart=0x0000000ff7a00000 wprEnd=0x0000000ffff00000
+#  SEC2_DEBUG_HEAP: ... publicBytes=0xfd9490000            (63.4 GiB)
+#  SEC2_DEBUG_LATE_PMA: candidate=6 base=0xff7900000 limit=0x13ffffffff left reserved (backs WPR2)

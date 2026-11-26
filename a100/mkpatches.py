@@ -21,6 +21,8 @@ TOP = 'open-gpu-kernel-modules-615.71.09'
 REPO = pathlib.Path('/root/cmpunlocker-0.5')
 PDIR = REPO / 'driver' / 'patches'
 GOOD_SEC2 = W / 'in' / 'sec2-good-backup.patch'
+# upstream v0.5 (commit 17535a0) version; the deployed one is already regenerated from it
+GOOD_BV = W / 'in' / 'booter-verify-upstream.patch'
 OUT = W / 'out'
 NEW_PATCH = 'a100-ss-param.patch'
 
@@ -69,6 +71,8 @@ _kgspSec2PostblTimingEnabled(OBJGPU *pGpu)
 GATE_NEW = r'''// Defined in kernel-open/nvidia/nv-pci.c. 0: the A100-strapped card boots stock.
 // 1: SM-speed override. 2: control run (same boot flow, SS0/SS1 left alone).
 extern int cmp_a100_ss;
+// Same file. -1 keeps the profile LOCAL_MEMORY_RANGE for the CMP cards; >= 0 overrides it.
+extern int cmp_lmr;
 
 static NvBool
 _kgspSec2PostblTimingEnabled(OBJGPU *pGpu)
@@ -82,6 +86,59 @@ _kgspSec2PostblTimingEnabled(OBJGPU *pGpu)
 '''
 
 MAIN_LOOP = '        for (plmIdx = 0; plmIdx < 12; plmIdx++)\n'
+
+# CMP POST-WRITE block. 0x00100ce0 is NV_PFB_PRI_MMU_LOCAL_MEMORY_RANGE (LOWER_SCALE
+# [3:0], LOWER_MAG [9:4]); the usable FB size the driver works with is mag << (scale + 20),
+# so 0x20b = 32 * 2 GiB = 64 GiB.
+POSTW_STOCK_OLD = '''            NvU32 cfg1Value;
+            NvU32 lmrValue;
+
+            if (devId == SEC2_POSTBL_TIMING_CMP_170HX_8GB_PCI_DEVICE_ID || devId == 0x20B5U)
+'''
+POSTW_STOCK_NEW = '''            NvU32 cfg1Value;
+            NvU32 lmrValue;
+            NvU32 cfg1Stock = GPU_REG_RD32(pGpu, 0x009a0204U);
+            NvU32 lmrStock  = GPU_REG_RD32(pGpu, 0x00100ce0U);
+
+            if (devId == SEC2_POSTBL_TIMING_CMP_170HX_8GB_PCI_DEVICE_ID || devId == 0x20B5U)
+'''
+
+POSTW_OVR_OLD = '''                lmrValue  = 0x0000028AU;
+            }
+
+            GPU_REG_WR32(pGpu, 0x0082381cU, 0x88888888U);
+'''
+POSTW_OVR_NEW = r'''                lmrValue  = 0x0000028AU;
+            }
+
+            //
+            // 0x00100ce0 is NV_PFB_PRI_MMU_LOCAL_MEMORY_RANGE: LOWER_SCALE [3:0],
+            // LOWER_MAG [9:4]. The driver sizes the GSP firmware region from it
+            // (mag << (scale + 20)), so 0x20b = 32 * 2 GiB = 64 GiB, which is what the
+            // 8gb profile assumes (8 FBP x 8 GiB). Cards whose fuse burn enabled 10 FBPs
+            // (20 FBPA x 4 GiB) get the full 80 GiB with cmp_lmr=0x28b (40 * 2 GiB), the
+            // value a real A100 80GB carries.
+            //
+            if (cmp_lmr >= 0)
+                lmrValue = (NvU32)cmp_lmr;
+
+            GPU_REG_WR32(pGpu, 0x0082381cU, 0x88888888U);
+'''
+
+POSTW_PRINT_OLD = r'''                      "CFG1=0x%08x LMR=0x%08x (devId=0x%x)\n",
+                      GPU_REG_RD32(pGpu, 0x0082381cU),
+                      GPU_REG_RD32(pGpu, 0x00823820U),
+                      GPU_REG_RD32(pGpu, 0x009a0204U),
+                      GPU_REG_RD32(pGpu, 0x00100ce0U),
+                      devId);
+'''
+POSTW_PRINT_NEW = r'''                      "CFG1=0x%08x LMR=0x%08x (devId=0x%x) stock CFG1=0x%08x LMR=0x%08x\n",
+                      GPU_REG_RD32(pGpu, 0x0082381cU),
+                      GPU_REG_RD32(pGpu, 0x00823820U),
+                      GPU_REG_RD32(pGpu, 0x009a0204U),
+                      GPU_REG_RD32(pGpu, 0x00100ce0U),
+                      devId, cfg1Stock, lmrStock);
+'''
 
 A100_BLOCK = r'''        if (devId == SEC2_POSTBL_TIMING_A100_STRAPPED_PCI_DEVICE_ID && cmp_a100_ss != 0)
         {
@@ -254,6 +311,16 @@ int cmp_a100_ss = 0;
 module_param(cmp_a100_ss, int, 0444);
 MODULE_PARM_DESC(cmp_a100_ss,
     "cmpunlocker: A100-strapped CMP 170HX SM-speed unlock (0=off, 1=SS0/SS1 override, 2=control)");
+
+// cmpunlocker: NV_PFB_PRI_MMU_LOCAL_MEMORY_RANGE for the CMP 170HX (10de:20c2, 10de:2082).
+//   -1   profile value of the built-in geometry (8gb: 0x20b = 64 GiB) - the default
+//   >= 0  value written to 0x00100ce0 before the GSP boot; the driver sizes the
+//        firmware region and the usable FB from it (mag[9:4] << (scale[3:0] + 20)).
+//        0x28b = 80 GiB for cards whose fuse burn enabled 10 FBPs.
+int cmp_lmr = -1;
+module_param(cmp_lmr, int, 0444);
+MODULE_PARM_DESC(cmp_lmr,
+    "cmpunlocker: CMP 170HX LOCAL_MEMORY_RANGE override (-1=profile 0x20b/64GiB, 0x28b=80GiB)");
 '''
 
 PARAM_PATCH_HEAD = '''cmpunlocker: module parameter cmp_a100_ss for the A100-strapped CMP 170HX
@@ -275,8 +342,7 @@ def main():
     extract(W / 'b', FILES)
     root = W / 'b' / TOP
     run(['patch', '-p1', '--no-backup-if-mismatch'], cwd=root, stdin=open(GOOD_SEC2))
-    run(['patch', '-p1', '--no-backup-if-mismatch'], cwd=root,
-        stdin=open(PDIR / 'booter-verify.patch'))
+    run(['patch', '-p1', '--no-backup-if-mismatch'], cwd=root, stdin=open(GOOD_BV))
 
     # ---- kernel_gsp.c
     p = root / GSP_C
@@ -288,6 +354,9 @@ def main():
                'A100 device id define')
     gsp = edit(gsp, GATE_OLD, GATE_NEW, 'gate')
     gsp = edit(gsp, MAIN_LOOP, A100_BLOCK + MAIN_LOOP, 'A100 block')
+    gsp = edit(gsp, POSTW_STOCK_OLD, POSTW_STOCK_NEW, 'POST-WRITE stock reads')
+    gsp = edit(gsp, POSTW_OVR_OLD, POSTW_OVR_NEW, 'POST-WRITE cmp_lmr override')
+    gsp = edit(gsp, POSTW_PRINT_OLD, POSTW_PRINT_NEW, 'POST-WRITE print')
     gsp = edit(gsp, LABEL_OLD, LABEL_NEW, 'a100Done label')
     gsp = edit(gsp, DEAD_OLD, '', 'dead A100 SS block')
     p.write_text(gsp)
@@ -341,7 +410,7 @@ def main():
     print('\nPATCH_ORDER (%d): %s' % (len(order), ' '.join(order)))
     print('rejected hunks files: %d, patch rc sum: %d' % (len(rej), bad))
     gsp_test = (troot / GSP_C).read_text()
-    for needle in ('cmp_a100_ss', 'a100Done:;', 'A100 WPR2 restore', 'extern int cmp_a100_ss;'):
+    for needle in ('cmp_a100_ss', 'cmp_lmr', 'a100Done:;', 'A100 WPR2 restore', 'extern int cmp_a100_ss;'):
         print('  kernel_gsp.c has %-24r : %s' % (needle, needle in gsp_test))
     print('  nv-pci.c has module_param(cmp_a100_ss : %s' %
           ('module_param(cmp_a100_ss' in (troot / NVPCI_C).read_text()))

@@ -11,7 +11,7 @@
      PACKED_REGISTRY_TABLE *pRegTable;
 --- a/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
 +++ b/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
-@@ -112,6 +112,39 @@
+@@ -112,6 +112,41 @@
  #include "ctrl/ctrl208f/ctrl208fucodeinstrumentation.h"
  #endif
  
@@ -37,6 +37,8 @@
 +// Defined in kernel-open/nvidia/nv-pci.c. 0: the A100-strapped card boots stock.
 +// 1: SM-speed override. 2: control run (same boot flow, SS0/SS1 left alone).
 +extern int cmp_a100_ss;
++// Same file. -1 keeps the profile LOCAL_MEMORY_RANGE for the CMP cards; >= 0 overrides it.
++extern int cmp_lmr;
 +
 +static NvBool
 +_kgspSec2PostblTimingEnabled(OBJGPU *pGpu)
@@ -51,7 +53,7 @@
  #include "crashcat/crashcat_report.h"
  
  #include "kernel/gpu/oob/kernel_oob.h"
-@@ -5436,7 +5469,7 @@
+@@ -5436,7 +5471,7 @@
      *pbRetry = NV_FALSE;
  
      // Fail early if WPR2 is up
@@ -60,7 +62,7 @@
          (!pGpu->getProperty(pGpu, PDB_PROP_GPU_PREINITIALIZED_WPR_REGION)))
      {
          NV_PRINTF(LEVEL_ERROR, "unexpected WPR2 already up, cannot proceed with booting GSP\n");
-@@ -5453,6 +5486,16 @@
+@@ -5453,6 +5488,16 @@
      // Populate WPR meta structure (requires knowing FB size on dGPU, which depends on GFW_BOOT)
      NV_CHECK_OK_OR_RETURN(LEVEL_ERROR, kgspPopulateWprMeta_HAL(pGpu, pKernelGsp, pGspFw));
  
@@ -77,7 +79,7 @@
      {
          // If the new FB layout requires a scrubber ucode to scrub additional space, prepare it now
          NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
-@@ -5462,6 +5505,241 @@
+@@ -5462,6 +5507,254 @@
      // Setup arguments for bootstrapping GSP
      NV_CHECK_OK_OR_RETURN(LEVEL_ERROR, kgspPrepareForBootstrap_HAL(pGpu, pKernelGsp, KGSP_BOOT_MODE_NORMAL));
  
@@ -249,6 +251,8 @@
 +            NvU32 devId = pGpu->idInfo.PCIDeviceID >> 16;
 +            NvU32 cfg1Value;
 +            NvU32 lmrValue;
++            NvU32 cfg1Stock = GPU_REG_RD32(pGpu, 0x009a0204U);
++            NvU32 lmrStock  = GPU_REG_RD32(pGpu, 0x00100ce0U);
 +
 +            if (devId == SEC2_POSTBL_TIMING_CMP_170HX_8GB_PCI_DEVICE_ID || devId == 0x20B5U)
 +            {
@@ -261,6 +265,17 @@
 +                lmrValue  = 0x0000028AU;
 +            }
 +
++            //
++            // 0x00100ce0 is NV_PFB_PRI_MMU_LOCAL_MEMORY_RANGE: LOWER_SCALE [3:0],
++            // LOWER_MAG [9:4]. The driver sizes the GSP firmware region from it
++            // (mag << (scale + 20)), so 0x20b = 32 * 2 GiB = 64 GiB, which is what the
++            // 8gb profile assumes (8 FBP x 8 GiB). Cards whose fuse burn enabled 10 FBPs
++            // (20 FBPA x 4 GiB) get the full 80 GiB with cmp_lmr=0x28b (40 * 2 GiB), the
++            // value a real A100 80GB carries.
++            //
++            if (cmp_lmr >= 0)
++                lmrValue = (NvU32)cmp_lmr;
++
 +            GPU_REG_WR32(pGpu, 0x0082381cU, 0x88888888U);
 +            GPU_REG_WR32(pGpu, 0x00823820U, 0x00000008U);
 +            GPU_REG_WR32(pGpu, 0x009a0204U, cfg1Value);
@@ -268,12 +283,12 @@
 +
 +            NV_PRINTF(LEVEL_ERROR,
 +                      "SEC2_DEBUG: POST-WRITE SS0=0x%08x SS1=0x%08x "
-+                      "CFG1=0x%08x LMR=0x%08x (devId=0x%x)\n",
++                      "CFG1=0x%08x LMR=0x%08x (devId=0x%x) stock CFG1=0x%08x LMR=0x%08x\n",
 +                      GPU_REG_RD32(pGpu, 0x0082381cU),
 +                      GPU_REG_RD32(pGpu, 0x00823820U),
 +                      GPU_REG_RD32(pGpu, 0x009a0204U),
 +                      GPU_REG_RD32(pGpu, 0x00100ce0U),
-+                      devId);
++                      devId, cfg1Stock, lmrStock);
 +        }
 +
 +        {
@@ -319,7 +334,7 @@
      // Release the API lock if relaxed locking for parallel init is enabled
      NvBool bRelaxedLocking = _kgspShouldRelaxGspInitLocking(pGpu);
      if (bRelaxedLocking)
-@@ -6343,6 +6621,84 @@
+@@ -6343,6 +6636,84 @@
      pKernelGsp->gspRmBootUcodeSize   = 0;
  }
  
@@ -404,7 +419,7 @@
  static NV_STATUS
  _kgspCreateSignatureMemdesc
  (
-@@ -6353,6 +6709,9 @@
+@@ -6353,6 +6724,9 @@
  {
      NV_STATUS status = NV_OK;
      NvU8 *pSignatureVa = NULL;
@@ -414,7 +429,7 @@
      NvU64 flags = MEMDESC_FLAGS_NONE;
  
      if (confComputeForceUnprotAlloc(pGpu))
-@@ -6363,7 +6722,7 @@
+@@ -6363,7 +6737,7 @@
      // NOTE: align to 256 because that's the alignment needed for Booter DMA
      NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
          memdescCreate(&pKernelGsp->pSignatureMemdesc, pGpu,
@@ -423,7 +438,7 @@
              NV_TRUE, ADDR_SYSMEM, NV_MEMORY_CACHED, flags));
  
      memdescTagAlloc(status,
-@@ -6375,8 +6734,48 @@
+@@ -6375,8 +6749,48 @@
          (pSignatureVa != NULL) ? NV_OK : NV_ERR_INSUFFICIENT_RESOURCES,
          fail_alloc);
  
@@ -474,7 +489,7 @@
  
      memdescUnmapInternal(pGpu, pKernelGsp->pSignatureMemdesc, 0);
      pSignatureVa = NULL;
-@@ -6393,6 +6792,69 @@
+@@ -6393,6 +6807,69 @@
      return status;
  }
  
@@ -544,7 +559,7 @@
  /*!
   * Verify that the version embedded in the .fwversion section of the ELF given
   * by pElfData and elfDataSize matches our NV_VERSION_STRING.
-@@ -7431,6 +7893,51 @@
+@@ -7431,6 +7908,51 @@
  {
      GspStaticConfigInfo *pGSCI = GPU_GET_GSP_STATIC_INFO(pGpu);
  

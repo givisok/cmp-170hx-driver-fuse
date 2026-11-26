@@ -15,7 +15,7 @@ experiments are done by reloading the modules with cmp_a100_ss=1 or 2.
  #include <linux/workqueue.h>
  
  #if defined(NV_PM_QOS_READ_VALUE_SUPPORTED)
-@@ -88,6 +89,17 @@
+@@ -88,6 +89,27 @@
  
  extern int NVreg_ExcludeAllGpus;
  
@@ -29,6 +29,16 @@ experiments are done by reloading the modules with cmp_a100_ss=1 or 2.
 +module_param(cmp_a100_ss, int, 0444);
 +MODULE_PARM_DESC(cmp_a100_ss,
 +    "cmpunlocker: A100-strapped CMP 170HX SM-speed unlock (0=off, 1=SS0/SS1 override, 2=control)");
++
++// cmpunlocker: NV_PFB_PRI_MMU_LOCAL_MEMORY_RANGE for the CMP 170HX (10de:20c2, 10de:2082).
++//   -1   profile value of the built-in geometry (8gb: 0x20b = 64 GiB) - the default
++//   >= 0  value written to 0x00100ce0 before the GSP boot; the driver sizes the
++//        firmware region and the usable FB from it (mag[9:4] << (scale[3:0] + 20)).
++//        0x28b = 80 GiB for cards whose fuse burn enabled 10 FBPs.
++int cmp_lmr = -1;
++module_param(cmp_lmr, int, 0444);
++MODULE_PARM_DESC(cmp_lmr,
++    "cmpunlocker: CMP 170HX LOCAL_MEMORY_RANGE override (-1=profile 0x20b/64GiB, 0x28b=80GiB)");
 +
  static void
  nv_check_and_exclude_gpu(

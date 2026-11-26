@@ -8,7 +8,7 @@
 | `gen3-boot` | `/usr/local/sbin/gen3-boot` | Фиксы после загрузки драйвера: REBAR A100-карты 128G → 32G + remove/rescan; ждёт все 3 карты; Gen3-ретрейн `05:00.0`/`06:00.0`; рестарт CT 101. Лог `/var/log/gen3.log`. |
 | `systemd/gen3.service` | `/etc/systemd/system/` | `After=multi-user.target nvidia-persistenced.service`, oneshot, `TimeoutStartSec=300`. |
 | `gen3_retrain.py` | `/root/gen3_retrain.py` | Volatile Gen3-ретрейн одной карты (`gen3_retrain.py 0000:05:00.0`): читает фьюз-гейты, чистит `CYA_0` bit 2 (DIS_G2), ставит `LINK_CONFIG_0[19:18]=1` (Gen3; кодирование обратное: 0 = Gen4, 1 = Gen3, 2 = Gen2), `LNKCTL2` target = 8.0 GT/s на карте и upstream-мосту, дёргает retrain. Всё сбрасывается при обесточивании. |
-| `modprobe.d/cmpunlocker-a100-ss.conf` | `/etc/modprobe.d/` | `options nvidia cmp_a100_ss=1` — SM-скорость A100-карты. Удалить файл + reboot = откат. |
+| `modprobe.d/cmpunlocker-a100-ss.conf` | `/etc/modprobe.d/` | `options nvidia cmp_a100_ss=1 cmp_lmr=0x28b`: SM-скорость A100-карты и 80 ГиБ на CMP-паре (`NV_PFB_PRI_MMU_LOCAL_MEMORY_RANGE`). Удалить файл + reboot = откат обеих опций. |
 | `modprobe.d/cmp-pcie-gen2.conf` | `/etc/modprobe.d/` | `NVreg_RegistryDwords="RmForceEnableGen2=1;RMPcieLinkSpeed=0x5"` — остался от эпохи Gen2, лежит как есть; Gen3 сейчас делается патчами драйвера и `gen3_retrain.py`. |
 | `modprobe.d/cmpunlocker-vfio.conf` | `/etc/modprobe.d/` | `vfio-pci disable_idle_d3=1` — от экспериментов с passthrough. |
 | `cmpunlocker-kernel-modules` | `/usr/local/sbin/` | Пересобирает NVIDIA-модули cmpunlocker под ядра, где их нет (`--missing` по умолчанию, `--kernel X --force`, `--check`). Никогда не выгружает работающий драйвер и не ребутает. |
@@ -27,6 +27,7 @@
    * `setpci -s 09:00.0 0xbc0.l=00000f00` (REBAR 32 GB), `remove` + `rescan`;
    * карта пробуется снова и грузится через путь `cmp_a100_ss`
      (`A100 SS unlock SS0 0x00000000->0x88888888 … normal BooterLoad status=0x0`);
+   * CMP-пара к этому моменту уже грузится с `LMR=0x28b` (80 ГиБ, `publicBytes=0x13d30f0000`);
    * ждёт, пока `nvidia-smi -L` не покажет 3 карты;
    * Gen3-ретрейн CMP-пары;
    * если CT 101 запущен (`onboot=1`) — его рестарт, чтобы внутри появились `/dev/nvidia*`.
@@ -37,7 +38,7 @@
 ```bash
 cat /sys/module/nvidia/parameters/cmp_a100_ss                 # 1
 nvidia-smi --query-gpu=index,name,memory.total,pcie.link.gen.current,pcie.link.width.current --format=csv
-journalctl -b -k  | grep -E "BAR1 REBAR programmed|CMP BAR1: final size|GPU2.*(A100|BooterLoad)"
+journalctl -b -k  | grep -E "BAR1 REBAR programmed|CMP BAR1: final size|GPU2.*(A100|BooterLoad)|POST-WRITE|SEC2_DEBUG_HEAP"
 journalctl -b -u gen3.service; tail /var/log/gen3.log
 cmpunlocker-kernel-modules --check
 ```

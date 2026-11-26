@@ -14,14 +14,15 @@ SM-производительность — включая карту, кото�
 |---|---|---|---|
 | Стряп | CMP 170HX (`10de:20c2`) | CMP 170HX (`10de:20c2`) | **A100 PCIe 80GB** (`10de:20b5`) |
 | UUID | `GPU-2f74a495…` | `GPU-295351c7…` | `GPU-ec614963…` |
-| Память (nvidia-smi / CUDA) | 81920 MiB / 63 GiB | 81920 MiB / 63 GiB | 81920 MiB / 79 GiB |
+| Память (nvidia-smi / CUDA) | 81920 MiB / 79 GiB | 81920 MiB / 79 GiB | 81920 MiB / 79 GiB |
 | SM | 112 | 106 | 106 |
 | PCIe | Gen3 x16 | Gen3 x16 | Gen3 x8 (LnkCap x16) |
 | Макс. SM-клок / лимит мощности | 1695 MHz / 250 W | 1695 MHz / 250 W | 1410 MHz / 300 W |
 | matmul 8192² fp16 | ~212 TFLOPS | ~214 TFLOPS | **~214 TFLOPS** |
 
 GPU2 до фикса считала в **23 раза медленнее** (9.2 TFLOPS, matmul 119 мс вместо 5.1 мс), и модель
-на конвейере PP=3 постоянно ждала именно этот рэнк. После — все три карты одинаковые.
+на конвейере PP=3 постоянно ждала именно этот рэнк. А на CMP-паре программа могла занять
+только 63 ГиБ из 80. После двух фиксов все три карты одинаковые: ~214 TFLOPS и 79 ГиБ.
 
 ## Что здесь лежит
 
@@ -40,6 +41,7 @@ a100/                            инструменты, которыми наш
 bench/gpubench.py                замер SM-производительности по картам
 docs/
   a100-sm-speed-unlock.md        разбор: почему карта была медленной и как это чинится
+  memory-80g-cmp.md              разбор: почему на CMP-паре было 63 ГиБ и как стало 79
   rig-and-history.md             железо, топология, хронология от стока до текущего состояния
   boot-logs/                     журналы загрузок: рабочий путь и две неудачные попытки
 ```
@@ -66,6 +68,10 @@ docs/
 7. **Фикс.** Параметр модуля `cmp_a100_ss=1`: до загрузки GSP открываем нужные PLM'ы тем же
    механизмом, что и cmpunlocker, восстанавливаем WPR2, пишем SS0/SS1 — и карта грузится штатно.
 8. **Проверка.** Холодная загрузка, замер 214 TFLOPS, vLLM на трёх картах поднимается сам.
+9. **Память на CMP-паре (63 → 79 ГиБ).** Драйвер берёт размер памяти из регистра
+   `NV_PFB_PRI_MMU_LOCAL_MEMORY_RANGE`, а туда писали 64 ГиБ по профилю для непрожжённых карт.
+   Параметр `cmp_lmr=0x28b` (80 ГиБ, как у настоящей A100) + тест памяти паттернами на весь объём.
+   Подробно — в [docs/memory-80g-cmp.md](docs/memory-80g-cmp.md).
 
 ## Как это загружается
 
@@ -74,8 +80,8 @@ BIOS (Above 4G Decoding = Enabled)
  └─ ядро 7.0.14-29-z2p-pve
      ├─ quirk 9902: BAR1 CMP-пары → 32 GB до нумерации шины      (A100-карте не срабатывает: BIOS
      │                                                             оставляет её BAR0 неназначенным)
-     ├─ modprobe nvidia  (options nvidia cmp_a100_ss=1)
-     │    ├─ CMP-пара: полный цикл cmpunlocker (PLM, SS0/SS1, CFG1/LMR, SM-RECONFIG, PCIe)
+     ├─ modprobe nvidia  (options nvidia cmp_a100_ss=1 cmp_lmr=0x28b)
+     │    ├─ CMP-пара: полный цикл cmpunlocker (PLM, SS0/SS1, CFG1/LMR=80 GiB, SM-RECONFIG, PCIe)
      │    └─ A100-карта: не прошла probe — BAR1 = 0 MB
      └─ gen3.service → /usr/local/sbin/gen3-boot
           1. A100-карта: REBAR 128G → 32G (setpci 0xbc0) + remove/rescan
@@ -96,7 +102,9 @@ BIOS (Above 4G Decoding = Enabled)
    `cp host/cmpunlocker-kernel-modules /usr/local/sbin/ && /usr/local/sbin/cmpunlocker-kernel-modules --kernel "$(uname -r)" --force`
    — соберёт модули под текущее ядро, не трогая работающий драйвер. Хук `host/kernel-postinst/`
    и `host/systemd/cmpunlocker-modules.{service,timer}` делают то же под новые ядра.
-3. **SM-скорость A100-карты.** `cp host/modprobe.d/cmpunlocker-a100-ss.conf /etc/modprobe.d/`.
+3. **Опции модуля.** `cp host/modprobe.d/cmpunlocker-a100-ss.conf /etc/modprobe.d/`:
+   `cmp_a100_ss=1` (SM-скорость A100-карты) и `cmp_lmr=0x28b` (80 ГиБ на CMP-картах после прожига;
+   для непрожжённых карт `cmp_lmr` не нужен — у них реально 64 ГиБ).
 4. **Загрузочные фиксы.** `cp host/gen3_retrain.py /root/`, `cp host/gen3-boot /usr/local/sbin/`,
    `cp host/systemd/gen3.service /etc/systemd/system/ && systemctl enable gen3.service`.
 5. `reboot`.
@@ -110,15 +118,20 @@ journalctl -b -k | grep -E "GPU2.*(A100|BooterLoad)"
 #  A100 WPR2 restore want=0x1ffffe00/0x00000000 read=0x1ffffe00/0x00000000
 #  A100 SS unlock SS0 0x00000000->0x88888888 SS1 0x00000000->0x00000008
 #  normal BooterLoad status=0x0
+journalctl -b -k | grep -E "POST-WRITE|SEC2_DEBUG_HEAP"       # CMP: LMR=0x28b, publicBytes=0x13d30f0000
 journalctl -b -u gen3.service                              # finished, CT101 rebooted
 ```
 
-Замер SM: `bench/gpubench.py` (torch, внутри контейнера с CUDA; на время замера vLLM остановить).
+Замер SM: `bench/gpubench.py`, память: `a100/memtest.py` (torch, внутри контейнера с CUDA;
+на время теста vLLM остановить).
 
 ## Эксперименты и откат
 
-* `a100/a100-ss-test.sh <0|1|2> [reset]` — перезагрузка модулей без ребута и снимок лога загрузки
-  A100-карты: `0` сток (задушена), `1` рабочий режим, `2` контроль без записи SS.
+* `a100/cmp-reload.sh [параметр=значение …]` — перезагрузка модулей без ребута с любыми параметрами
+  (`cmp_lmr=0x28b` и т. п.) и снимок лога загрузки всех карт; vLLM останавливает и запускает обратно сам.
+* `a100/a100-ss-test.sh <0|1|2> [reset]` — то же только для A100-карты: `0` сток (задушена),
+  `1` рабочий режим, `2` контроль без записи SS.
+* `a100/memtest.py <устройство>` — тест всей памяти паттернами (в контейнере с CUDA).
 * Патчи `sec2-postbl-plm-ss-cfg.patch`, `booter-verify.patch`, `a100-ss-param.patch` не править
   руками: `a100/mkpatches.py` перегенерирует их из pristine-тарбола, `a100/deploy.py` раскладывает
   и валидирует (`--revert` — назад).
@@ -127,8 +140,6 @@ journalctl -b -u gen3.service                              # finished, CT101 reb
 
 ## Что осталось
 
-* CUDA видит **63 GiB** на CMP-паре (public region не расширен до 80 GiB — нужна правка late-pma);
-  на A100-карте 79 GiB.
 * A100-карта работает на **x8**: лейны 8–15 (конденсаторы распаяны, но слот/PLX) — GT 520 занимает
   x16-порт второго PLX.
 * P2P между картами не работает на этом железе (X99 + PLX, NCCL ходит через SHM) — история в
