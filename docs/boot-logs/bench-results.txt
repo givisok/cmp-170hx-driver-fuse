@@ -1,0 +1,23 @@
+# Замеры 2026-11-27, bench/gpubench.py: matmul 8192x8192 fp16 (30 итераций) + мелкий кернел.
+# Запуск в образе vllm-sm80:q38fn (torch), контейнер qwen-intel на время замера остановлен.
+
+## До фикса (2026-11-26): A100-зашитая карта грузится стоком
+#    GPU2: matmul 119 ms  ≈ 9.2 TFLOPS; clocks 1410 MHz / P0 / util 100% / 83 W; мелкие кернелы нормальные.
+#    CMP-пара в то же время: ~212 TFLOPS (5.2 ms).
+
+## После фикса, runtime-эксперимент cmp_a100_ss=1 (01:11)
+GPU0 [NVIDIA CMP 170HX] SMs=112 mem=63GiB matmul=5.16ms (213.1 TFLOPS) smallkernel=10.5us
+GPU1 [NVIDIA CMP 170HX] SMs=106 mem=63GiB matmul=5.13ms (214.5 TFLOPS) smallkernel=9.9us
+GPU2 [NVIDIA A100 80GB PCIe] SMs=106 mem=79GiB matmul=5.14ms (214.0 TFLOPS) smallkernel=10.3us
+
+## После фиксации в /etc/modprobe.d и холодной загрузки (01:16)
+GPU0 [NVIDIA CMP 170HX] SMs=112 mem=63GiB matmul=5.18ms (212.1 TFLOPS) smallkernel=10.2us
+GPU1 [NVIDIA CMP 170HX] SMs=106 mem=63GiB matmul=5.14ms (213.7 TFLOPS) smallkernel=10.8us
+GPU2 [NVIDIA A100 80GB PCIe] SMs=106 mem=79GiB matmul=5.14ms (214.0 TFLOPS) smallkernel=10.7us
+
+## vLLM (qwen3.8, PP=3 на трёх картах), одиночный запрос, после фикса
+#    decode: 512 токенов за 4.40 s -> 116 tok/s (промпт 70 токенов)
+#    prefill: промпт 6903 токена, TTFT ~1.44 s -> ~4800 tok/s
+#    для сравнения, лог 2026-11-26 в «медленном» состоянии (среднее по 10-секундному окну,
+#    1 запрос): Avg generation throughput: 38.7 tokens/s  — методика другая, прямое
+#    сравнение приблизительное.

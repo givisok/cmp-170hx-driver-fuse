@@ -1,0 +1,36 @@
+# Журнал загрузки 2026-11-27 01:31:53 MSK (pve, ядро 7.0.14-29-z2p-pve, nvidia.ko 615.71.09 + cmpunlocker).
+# A100-зашитая карта (09:00.0, 10de:20b5) грузится через cmp_a100_ss=1 (options nvidia в /etc/modprobe.d).
+# Это путь после REBAR-фикса и rescan (gen3.service). Строки 'Booter failed ... 0x31' после каждого
+# запуска payload — норма: так post-bootloader payload сообщает, что отработал и завершил загрузку.
+# journalctl -b -k | grep GPU2, обрезано до релевантного.
+
+[   28.952074] pve kernel: NVRM: GPU2 _kgspCreateSignatureMemdesc: SEC2_DEBUG: saved stock signature (4096 bytes)
+[   28.960078] pve kernel: NVRM: GPU2 _kgspBootGspRm: SEC2_DEBUG: WPR meta fbSize=0x0000001400000000 wprEnd=0x00000013fff00000 heapSize=0x0000000007000000
+[   28.960156] pve kernel: NVRM: GPU2 _kgspBootGspRm: SEC2_DEBUG: saved WPR2 lo=0x1ffffe00 hi=0x00000000
+[   28.960172] pve kernel: NVRM: GPU2 _kgspBootGspRm: SEC2_DEBUG: A100 mode=1 stock SS0=0x00000000 SS1=0x00000000 PLM WPR_CFG=0x0004cb8f WPR=0x0004cb8f FEAT=0xffffff8f
+[   28.992114] pve kernel: NVRM: GPU2 kgspExecuteBooterLoad_TU102: failed to execute Booter Load: 0xffff
+[   28.992133] pve kernel: NVRM: GPU2 _kgspBootGspRm: SEC2_DEBUG: A100 PLM[0] WPR_CFG(0x1fa7cc) attempt=0 status=0xffff reg=0xfffff0ff WPR2=0x13f78000/0x13ffee00
+[   29.021106] pve kernel: NVRM: GPU2 kgspExecuteBooterLoad_TU102: failed to execute Booter Load: 0xffff
+[   29.021119] pve kernel: NVRM: GPU2 _kgspBootGspRm: SEC2_DEBUG: A100 PLM[2] WPR(0x1fa7c4) attempt=0 status=0xffff reg=0xffffffff WPR2=0x13f78000/0x13ffee00
+[   29.050089] pve kernel: NVRM: GPU2 kgspExecuteBooterLoad_TU102: failed to execute Booter Load: 0xffff
+[   29.050105] pve kernel: NVRM: GPU2 _kgspBootGspRm: SEC2_DEBUG: A100 PLM[3] FEAT(0x823804) attempt=0 status=0xffff reg=0xffffffff WPR2=0x13f78000/0x13ffee00
+[   29.050129] pve kernel: NVRM: GPU2 _kgspBootGspRm: SEC2_DEBUG: A100 WPR2 restore want=0x1ffffe00/0x00000000 read=0x1ffffe00/0x00000000
+[   29.050146] pve kernel: NVRM: GPU2 _kgspBootGspRm: SEC2_DEBUG: A100 SS unlock SS0 0x00000000->0x88888888 SS1 0x00000000->0x00000008
+[   29.050164] pve kernel: NVRM: GPU2 _kgspBootGspRm: SEC2_DEBUG: A100 WPR meta updated fbSize=0x0000001400000000 wprStart=0x00000013f7800000 wprEnd=0x00000013fff00000 heapOffset=0x00000013f7900000 heapSize=0x0000000007000000 WPR2=0x1ffffe00/0x00000000
+[   29.097050] pve kernel: NVRM: GPU2 kgspBootstrap_TU102: SEC2_DEBUG: normal BooterLoad status=0x0 WPR2=0x13f78000/0x13ffee00
+[   29.097099] pve kernel: NVRM: GPU2 kgspBootstrap_TU102: SEC2_DEBUG: POST-BooterLoad verify PLM=0xffffffff SS0=0x88888888 SS1=0x00000008 CFG1=0x02779000 LMR=0x0000028b
+
+# --- /var/log/gen3.log (тот же ребут) ---
+2026-11-27T01:32:11+03:00 rebar 32G fixup done (was 00001101)
+2026-11-27T01:32:14+03:00 nvidia-smi sees 3 GPU(s)
+0000:05:00.0 after:  LNKSTA=0x1103 (speed=Gen3, width=x16)  trained=YES
+0000:06:00.0 after:  LNKSTA=0x1103 (speed=Gen3, width=x16)  trained=YES
+2026-11-27T01:32:22+03:00 gen3 retrain done
+2026-11-27T01:32:35+03:00 CT101 rebooted
+2026-11-27T01:32:35+03:00 gen3-boot finished
+
+# --- journalctl -b -u gen3.service ---
+[   47.256582] pve pct[2907]: <root@pam> starting task UPID:pve:00000B6C:00001275:6B08B37D:vzreboot:101:root@pam:
+[   47.256587] pve pct[2924]: requesting reboot of CT 101: UPID:pve:00000B6C:00001275:6B08B37D:vzreboot:101:root@pam:
+[   52.669369] pve pct[2907]: <root@pam> end task UPID:pve:00000B6C:00001275:6B08B37D:vzreboot:101:root@pam: OK
+[   52.695437] pve systemd[1]: Finished gen3.service - CMP 170HX PCIe Gen3 volatile retrain (after driver init).

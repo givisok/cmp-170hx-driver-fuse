@@ -1,0 +1,31 @@
+#!/bin/sh
+# /etc/kernel/postinst.d/99-cmpunlocker-modules
+#
+# A new kernel arrives without the patched (cmpunlocker) NVIDIA modules, and the CMP
+# 170HX cards are dead on that kernel until they are built. Hand the build to systemd
+# so dpkg is not blocked, and let the timer retry if the box reboots meanwhile.
+#
+# kernel-package calls us as: <version> [<zimage>]
+
+KVER="$1"
+
+[ -x /usr/local/sbin/cmpunlocker-kernel-modules ] || exit 0
+case "$KVER" in
+    *-pve) ;;
+    *) exit 0 ;;
+esac
+
+UNIT="cmpunlocker-modules-$(printf '%s' "$KVER" | tr -c 'A-Za-z0-9' '_')"
+
+if command -v systemd-run >/dev/null 2>&1; then
+    systemd-run --quiet --collect --unit="$UNIT" \
+        --property=Type=oneshot \
+        --property=Nice=10 \
+        --property=Description="cmpunlocker: build NVIDIA modules for $KVER" \
+        /usr/local/sbin/cmpunlocker-kernel-modules --kernel "$KVER" --install-headers \
+        && exit 0
+fi
+
+# no systemd (or systemd-run failed): do it inline rather than lose the build
+/usr/local/sbin/cmpunlocker-kernel-modules --kernel "$KVER" --install-headers >/dev/null 2>&1
+exit 0

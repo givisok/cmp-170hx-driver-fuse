@@ -1,0 +1,11 @@
+[Unit]
+Description=Keep cmpunlocker NVIDIA modules in sync with installed kernels
+
+[Timer]
+# catch a kernel installed while the box was down, then poll periodically
+OnBootSec=10min
+OnUnitActiveSec=6h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+
+# build artifacts of the cmpunlocker tree
+cmpunlocker/driver/.build/
+cmpunlocker/logs/
+*.o
+*.ko
+*.cmd
+*.mod
+*.mod.c
+Module.symvers
+modules.order
+*.orig
+*.rej

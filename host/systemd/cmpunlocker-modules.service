@@ -1,0 +1,12 @@
+[Unit]
+Description=Build cmpunlocker NVIDIA modules for Proxmox kernels that lack them
+Documentation=file:/var/log/cmpunlocker-kernel-modules.log
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+ExecStart=/usr/local/sbin/cmpunlocker-kernel-modules --missing --install-headers

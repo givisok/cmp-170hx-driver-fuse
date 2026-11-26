@@ -1,0 +1,47 @@
+#!/bin/bash
+# CMP rig boot fixups:
+#   (1) A100-strapped card: REBAR 128G -> 32G + rescan (the BIOS leaves its BARs
+#       unassigned, so the kernel quirk cannot do it);
+#   (2) once all three GPUs are up, Gen3 retrain on the two CMP cards;
+#   (3) restart the vLLM CT so it re-mounts /dev/nvidia* after the rescan dance.
+# Enabled as gen3.service (after multi-user.target). Log: /var/log/gen3.log
+LOG=/var/log/gen3.log
+log() { echo "$(date -Is) $*" >> $LOG; }
+
+# 1. REBAR fixup for 09:00.0 (waits for device)
+for i in $(seq 1 60); do [ -e /sys/bus/pci/devices/0000:09:00.0 ] && break; sleep 2; done
+if [ -e /sys/bus/pci/devices/0000:09:00.0 ]; then
+  cur=$(setpci -s 09:00.0 0xbc0.l 2>/dev/null)
+  if [ "$(( (0x$cur >> 8) & 0x3f ))" -gt 15 ] 2>/dev/null; then
+    setpci -s 09:00.0 0xbc0.l=00000f00
+    sleep 1
+    echo 1 > /sys/bus/pci/devices/0000:09:00.0/remove
+    sleep 1
+    echo 1 > /sys/bus/pci/rescan
+    log "rebar 32G fixup done (was $cur)"
+  fi
+fi
+
+# 2. wait until the driver has finished with all three GPUs (the A100-strapped card is
+#    probed a few seconds after the rescan and boots through the cmp_a100_ss path), then
+#    Gen3 retrain on 05/06 (idempotent if the driver already did it)
+gpus=0
+for i in $(seq 1 90); do
+  gpus=$(timeout 20 nvidia-smi -L 2>/dev/null | grep -c '^GPU ')
+  [ "$gpus" -ge 3 ] && break
+  sleep 2
+done
+log "nvidia-smi sees $gpus GPU(s)"
+sleep 2
+for bdf in 0000:05:00.0 0000:06:00.0; do
+  /usr/bin/python3 /root/gen3_retrain.py $bdf 2>&1 | grep -E '^after:' | sed "s/^/$bdf /" >> $LOG
+done
+log "gen3 retrain done"
+
+# 3. restart the vLLM CT so it re-mounts /dev/nvidia* after the rescan dance
+sleep 5
+if pct status 101 2>/dev/null | grep -q running; then
+  pct reboot 101 2>/dev/null
+  log "CT101 rebooted"
+fi
+log "gen3-boot finished"

@@ -1,0 +1,329 @@
+#!/bin/bash
+# cmpunlocker-kernel-modules
+#
+# Keep the patched NVIDIA modules (cmpunlocker, CMP 170HX 64 GB unlock) in sync with
+# every installed Proxmox kernel, so `dist-upgrade` cannot silently kill the GPUs.
+#
+#   - builds: nvidia.ko nvidia-uvm.ko nvidia-modeset.ko nvidia-drm.ko nvidia-peermem.ko
+#             + cmp_no_bus_reset.ko   -> /lib/modules/<kver>/updates/cmpunlocker/
+#   - installs proxmox-headers-<kver> when the headers are missing
+#   - NEVER unloads/reloads the running driver and NEVER reboots: the running box with
+#     live CUDA contexts is left exactly as it was.
+#   - flags stock vs patched (-z2p) kernels: without the kernel BAR1 quirk a fresh
+#     kernel is only a fallback, not a boot target (see /root/CMP170HX-README.md)
+#
+# Usage:
+#   cmpunlocker-kernel-modules [--kernel <kver>]... [--missing] [--force]
+#                              [--install-headers] [--check] [--dry-run]
+#
+#   --check    print a table of installed kernels and what they lack (read-only)
+#   --missing  every installed *-pve kernel without usable modules (default target)
+#   --force    rebuild even where the modules already look correct
+#
+# Wiring (already installed):
+#   /etc/kernel/postinst.d/99-cmpunlocker-modules   fires on every kernel install and
+#       hands the build to systemd-run so dpkg is not blocked
+#   cmpunlocker-modules.timer / .service            backstop: re-checks at boot and
+#       every 6h, so an interrupted build (reboot mid-build) heals itself
+#   log: /var/log/cmpunlocker-kernel-modules.log
+#   docs: /usr/share/doc/cmpunlocker-kernel-modules/README.md
+#   disable: systemctl disable --now cmpunlocker-modules.timer
+#
+# Exit code = number of kernels that still lack usable modules.
+
+set -uo pipefail
+
+REPO_DRIVER="${CMPUNLOCKER_REPO:-/root/cmpunlocker-0.5/driver}"
+BUILDER="$REPO_DRIVER/build.sh"
+PT_SRC="$REPO_DRIVER/passthrough"
+LOG=/var/log/cmpunlocker-kernel-modules.log
+LOCKDIR=/run/lock
+LOCK="$LOCKDIR/cmpunlocker-modules.lock"
+
+# build.sh ends by stopping nvidia-persistenced and trying modprobe -r; that is
+# unwanted here (live workloads), so everything from this line on is dropped.
+TAIL_CUT='info "Attempting to unload NVIDIA modules..."'
+
+MODULES=(nvidia nvidia-uvm nvidia-modeset nvidia-drm nvidia-peermem cmp_no_bus_reset)
+SIDES=(driver_version card_profile unlock_geometry gpu_inventory)
+
+DRY=0
+INSTALL_HEADERS=0
+FORCE=0
+CHECK_ONLY=0
+declare -a WANT=()
+
+log() {
+    printf '%s %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOG"
+}
+
+usage() {
+    # the header comment is the manual
+    sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --kernel) WANT+=("$2"); shift 2 ;;
+        --missing) INSTALL_HEADERS=1; shift ;;
+        --force) FORCE=1; shift ;;
+        --install-headers) INSTALL_HEADERS=1; shift ;;
+        --check) CHECK_ONLY=1; shift ;;
+        --dry-run) DRY=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "unknown argument: $1" >&2; usage; exit 2 ;;
+    esac
+done
+
+[ -d "$LOCKDIR" ] || mkdir -p "$LOCKDIR"
+
+# One writer at a time: the kernel postinst hook and the systemd timer can overlap.
+# --check only reads, so it never waits for the lock.
+if [ "$CHECK_ONLY" != 1 ]; then
+    exec 9>"$LOCK"
+    if ! flock -n 9; then
+        log "another run holds $LOCK - nothing to do"
+        exit 0
+    fi
+fi
+
+mod_dir() { printf '/lib/modules/%s/updates/cmpunlocker' "$1"; }
+have_kmod() { [ -d "/lib/modules/$1" ] && [ -e "/lib/modules/$1/build" ]; }
+
+# Built modules are only half the story. The cards need the locally patched kernel
+# (-z2p: PCI bridge window alignment fix + BAR1 REBAR-to-32GB early quirk); on a stock
+# kernel BAR1 comes out as a boot lottery (3/3, 2/3 or 1/3 cards) and a card that got
+# 0 MB needs a full power cycle, not a reboot. See /root/CMP170HX-README.md.
+PATCHED_DOC=/root/CMP170HX-README.md
+Z2P_PATCHES="9901-9902 (see $PATCHED_DOC)"
+is_patched_kver() { case "$1" in *-z2p-pve) return 0 ;; *) return 1 ;; esac; }
+
+# userspace driver version: the kernel module must match it exactly.
+# Every candidate is validated, because nvidia-smi answers with an error message
+# (not a version) while the driver is not loaded, and /proc is absent then.
+version_ok() { printf '%s' "$1" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; }
+
+userspace_version() {
+    local v="" f
+    if [ -r /proc/driver/nvidia/version ]; then
+        v=$(grep -m1 '^NVRM version:' /proc/driver/nvidia/version 2>/dev/null \
+            | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+    fi
+    if ! version_ok "$v"; then
+        v=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null \
+            | head -1 | tr -d '[:space:]')
+    fi
+    if ! version_ok "$v"; then
+        for f in $(ls -1dt /lib/modules/*/updates/cmpunlocker/driver_version 2>/dev/null); do
+            v=$(tr -d '[:space:]' < "$f" 2>/dev/null)
+            version_ok "$v" && break
+        done
+    fi
+    version_ok "$v" && printf '%s' "$v"
+    return 0
+}
+
+installed_kernels() {
+    ls -1 /lib/modules/ 2>/dev/null | grep -- '-pve$' | sort -V
+}
+
+needs_build() {
+    local k="$1" d
+    d=$(mod_dir "$k")
+    [ "$FORCE" = 1 ] && return 0
+    for m in "${MODULES[@]}"; do
+        [ -f "$d/$m.ko" ] || return 0
+        [ "$(modinfo -F vermagic "$d/$m.ko" 2>/dev/null | awk '{print $1}')" = "$k" ] || return 0
+    done
+    return 1
+}
+
+verify() {
+    local k="$1" d m v problems=0
+    d=$(mod_dir "$k")
+    for m in "${MODULES[@]}"; do
+        if [ ! -f "$d/$m.ko" ]; then
+            log "  MISSING $m.ko"
+            problems=$((problems + 1))
+            continue
+        fi
+        v=$(modinfo -F vermagic "$d/$m.ko" 2>/dev/null | awk '{print $1}')
+        if [ "$v" != "$k" ]; then
+            log "  VERMAGIC $m.ko = '$v' (expected $k)"
+            problems=$((problems + 1))
+        fi
+    done
+    for f in "${SIDES[@]}"; do
+        [ -f "$d/$f" ] || { log "  MISSING side file $f"; problems=$((problems + 1)); }
+    done
+    # what modprobe would load for this kernel
+    local path
+    path=$(modinfo -k "$k" nvidia -n 2>/dev/null)
+    case "$path" in
+        */updates/cmpunlocker/nvidia.ko) : ;;
+        *) log "  RESOLVER modprobe would load '${path:-nothing}'"; problems=$((problems + 1)) ;;
+    esac
+    return $problems
+}
+
+ensure_headers() {
+    local k="$1" pkg
+    have_kmod "$k" && return 0
+    if [ "$INSTALL_HEADERS" != 1 ]; then
+        log "  headers for $k absent (pass --install-headers to fix)"
+        return 1
+    fi
+    for pkg in "proxmox-headers-$k" "linux-headers-$k"; do
+        if apt-cache policy "$pkg" 2>/dev/null | grep -q 'Candidate: [0-9]'; then
+            break
+        fi
+        pkg=""
+    done
+    [ -n "$pkg" ] || { log "  no headers package found for $k"; return 1; }
+    if fuser -u /var/lib/dpkg/lock-frontend >/dev/null 2>&1; then
+        log "  dpkg is busy, will retry on the next run"
+        return 1
+    fi
+    log "  installing $pkg"
+    [ "$DRY" = 1 ] && return 0
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$pkg" >>"$LOG" 2>&1 \
+        || { log "  apt-get install $pkg FAILED"; return 1; }
+    have_kmod "$k" || { log "  headers still missing after install"; return 1; }
+    return 0
+}
+
+# the metadata files describe the physical cards, so copy them from a kernel that
+# already has a complete install instead of writing an empty gpu_inventory
+reference_dir() {
+    local d
+    for d in $(ls -1dt /lib/modules/*/updates/cmpunlocker 2>/dev/null); do
+        [ -s "$d/gpu_inventory" ] && { printf '%s' "$d"; return 0; }
+    done
+    return 1
+}
+
+build_nvidia() {
+    local k="$1" gen inv
+    inv=$(reference_dir) && inv=$(cat "$inv/gpu_inventory") || inv=""
+    gen="$REPO_DRIVER/.generated-by-hook-$k.sh"
+    # same builder, two changes: target kernel + drop the module-reload tail
+    if ! awk -v kv="$k" -v cut="$TAIL_CUT" '
+        $0 == cut { exit }
+        /^KVER=/ { print "KVER=\"" kv "\""; next }
+        { print }
+    ' "$BUILDER" > "$gen"; then
+        log "  could not generate builder copy"
+        return 1
+    fi
+    chmod +x "$gen"
+    log "  building nvidia modules (this takes a few minutes)"
+    [ "$DRY" = 1 ] && return 0
+    if ! CMPUNLOCKER_GPU_INVENTORY="$inv" bash "$gen" >>"$LOG" 2>&1; then
+        log "  BUILD FAILED for $k (see $LOG)"
+        return 1
+    fi
+    rm -f "$gen"
+    return 0
+}
+
+build_no_bus_reset() {
+    local k="$1" work
+    work="/var/lib/cmpunlocker-hook/passthrough-$k"
+    [ -f "$PT_SRC/cmp_no_bus_reset.c" ] || { log "  $PT_SRC/cmp_no_bus_reset.c not found"; return 1; }
+    mkdir -p "$work" || return 1
+    cp -f "$PT_SRC/cmp_no_bus_reset.c" "$PT_SRC/Makefile" "$work/" || return 1
+    [ "$DRY" = 1 ] && return 0
+    if ! make -C "/lib/modules/$k/build" M="$work" modules >>"$LOG" 2>&1; then
+        log "  cmp_no_bus_reset build FAILED for $k"
+        return 1
+    fi
+    install -D -m 0644 "$work/cmp_no_bus_reset.ko" "$(mod_dir "$k")/cmp_no_bus_reset.ko" || return 1
+    depmod -a "$k" || return 1
+    return 0
+}
+
+# carry the per-card metadata over, so a rebuilt kernel reports the same profile
+seed_sides() {
+    local k="$1" ref
+    ref=$(reference_dir) || return 0
+    mkdir -p "$(mod_dir "$k")"
+    for f in gpu_inventory card_profile unlock_geometry; do
+        [ -f "$ref/$f" ] && cp -f "$ref/$f" "$(mod_dir "$k")/$f" 2>>"$LOG"
+    done
+    printf '  seeded %s/%s metadata\n' "$(basename "$(dirname "$(dirname "$ref")")")" "gpu_inventory"
+}
+
+VER=$(userspace_version)
+if [ -z "$VER" ]; then
+    log "cannot determine the installed NVIDIA userspace version"
+    exit 1
+fi
+if ! grep -qx "$VER" "$REPO_DRIVER/VERSION" 2>/dev/null; then
+    log "userspace driver '$VER' is not in $REPO_DRIVER/VERSION - refusing to guess, build manually"
+    exit 1
+fi
+
+if [ "${#WANT[@]}" -eq 0 ]; then
+    WANT=($(installed_kernels))
+fi
+
+if [ "$CHECK_ONLY" = 1 ]; then
+    printf '%-24s %-10s %-8s %-15s %s\n' KERNEL MODULES HEADERS BAR1 NOTE
+    bad=0
+    for k in "${WANT[@]}"; do
+        st="OK"; vlog=""
+        if needs_build "$k"; then st="MISSING"; bad=$((bad + 1)); fi
+        hd="yes"; have_kmod "$k" || hd="no"
+        if is_patched_kver "$k"; then bar1="z2p quirk"; else bar1="stock/lottery"; fi
+        vlog=$( { verify "$k" || true; } 2>&1 | head -3 | tr '\n' ';')
+        printf '%-24s %-10s %-8s %-15s %s\n' "$k" "$st" "$hd" "$bar1" "${vlog:0:58}"
+    done
+    printf 'driver (userspace): %s\n' "$VER"
+    running=$(uname -r)
+    printf 'running kernel: %s\n' "$running"
+    if is_patched_kver "$running"; then
+        printf '  BAR1 REBAR lines in dmesg: %s (want one per card), final size lines: %s\n' \
+            "$(dmesg 2>/dev/null | grep -c 'BAR1 REBAR programmed')" \
+            "$(dmesg 2>/dev/null | grep -c 'CMP BAR1: final size')"
+    else
+        printf '  WARN running kernel %s is stock: BAR1 is a boot lottery - %s\n' "$running" "$Z2P_PATCHES"
+    fi
+    printf 'note: rc counts module problems only; "stock/lottery" = usable as fallback, not as target\n'
+    exit $bad
+fi
+
+rc=0
+log "=== run: kernels '${WANT[*]}' driver=$VER force=$FORCE dry=$DRY ==="
+for k in "${WANT[@]}"; do
+    case "$k" in
+        *-pve) : ;;
+        *) log "skip $k (not a pve kernel)"; continue ;;
+    esac
+    if ! needs_build "$k"; then
+        log "$k: modules already in place"
+        continue
+    fi
+    if [ "$DRY" = 1 ]; then
+        log "$k: DRY-RUN would build 5 nvidia modules + cmp_no_bus_reset into $(mod_dir "$k"), then depmod -a $k"
+        log "  headers now: $(have_kmod "$k" && echo present || echo 'missing (--install-headers pulls proxmox-headers-'"$k"')')"
+        continue
+    fi
+    log "$k: building cmpunlocker modules (driver $VER)"
+    if ensure_headers "$k" && build_nvidia "$k" && build_no_bus_reset "$k"; then
+        seed_sides "$k"
+        depmod -a "$k" >>"$LOG" 2>&1
+        if verify "$k"; then
+            log "$k: DONE - ready for the next boot (running driver untouched)"
+            if ! is_patched_kver "$k"; then
+                log "  $k is a STOCK kernel: no BAR1 REBAR quirk -> boot it only as a fallback"
+                log "  for real use rebuild the -z2p variant: $Z2P_PATCHES, see $PATCHED_DOC"
+            fi
+        else
+            log "$k: VERIFY FAILED"; rc=$((rc + 1))
+        fi
+    else
+        log "$k: NOT READY"; rc=$((rc + 1))
+    fi
+done
+log "=== finished, rc=$rc ==="
+exit $rc

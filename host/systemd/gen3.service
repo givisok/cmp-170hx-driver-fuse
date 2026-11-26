@@ -1,0 +1,10 @@
+[Unit]
+Description=CMP 170HX PCIe Gen3 volatile retrain (after driver init)
+After=multi-user.target nvidia-persistenced.service
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/gen3-boot
+TimeoutStartSec=300
+RemainAfterExit=yes
+[Install]
+WantedBy=multi-user.target

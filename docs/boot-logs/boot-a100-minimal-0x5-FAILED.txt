@@ -1,0 +1,30 @@
+# Неудачная попытка, 2026-11-27 00:32:38 MSK: «minimal»-версия патча, в которой открывался
+# только PLM FEAT. Restore WPR2 (0x1fa824/28) молча отбрасывался (регистры закрыты PLM
+# WPR_CFG/WPR), WPR2 оставался «поднятым» (HI != 0), и настоящий booter выходил с 0x5 через
+# 5 мс. Четыре попытки, probe карты завершился ошибкой, хост продолжил работу.
+# (Журнал этой загрузки позже ротировался; строки сохранены из вывода
+#  journalctl -b -1 -k | grep GPU2 на момент разбора.)
+
+[   26.036129] pve kernel: NVRM: GPU2 _kgspCreateSignatureMemdesc: SEC2_DEBUG: saved stock signature (4096 bytes)
+[   26.036222] pve kernel: NVRM: GPU2 _kgspCreateSignatureMemdesc: SEC2_DEBUG: /lib/firmware/nvidia/ga100/gsp/dmem.bin not found (0x59), using built-in payload
+[   26.044127] pve kernel: NVRM: GPU2 _kgspBootGspRm: SEC2_DEBUG: WPR meta fbSize=0x0000001400000000 wprEnd=0x00000013fff00000 heapSize=0x0000000007000000
+[   26.044216] pve kernel: NVRM: GPU2 _kgspBootGspRm: SEC2_DEBUG: saved WPR2 lo=0x1ffffe00 hi=0x00000000
+[   26.078122] pve kernel: NVRM: GPU2 s_executeBooterUcode_TU102: Booter failed with non-zero error code: 0x31
+[   26.078168] pve kernel: NVRM: GPU2 kgspExecuteBooterLoad_TU102: failed to execute Booter Load: 0xffff
+[   26.078186] pve kernel: NVRM: GPU2 _kgspBootGspRm: SEC2_DEBUG: PLM[3] FEAT(0x823804) attempt=0 status=0xffff reg=0xffffffff
+[   26.078208] pve kernel: NVRM: GPU2 _kgspBootGspRm: SEC2_DEBUG: A100-minimal SS unlock: SS0=0x88888888 SS1=0x00000008
+[   26.078220] pve kernel: NVRM: GPU2 _kgspBootGspRm: SEC2_DEBUG: A100-minimal signature rebuild: 0x0
+[   26.078236] pve kernel: NVRM: GPU2 kgspBootstrap_TU102: SEC2_DEBUG: kflcnResetIntoRiscv: 0x0
+[   26.083152] pve kernel: NVRM: GPU2 s_executeBooterUcode_TU102: Booter failed with non-zero error code: 0x5
+[   26.083184] pve kernel: NVRM: GPU2 kgspExecuteBooterLoad_TU102: failed to execute Booter Load: 0xffff
+[   26.083197] pve kernel: NVRM: GPU2 kgspBootstrap_TU102: failed to execute Booter Load (ucode for initial boot): 0xffff
+[   26.083220] pve kernel: NVRM: GPU2 _kgspBootGspRm: SEC2_DEBUG: WPR meta fbSize=0x0000001400000000 wprEnd=0x00000013f7700000 heapSize=0x0000000007000000
+[   26.083235] pve kernel: NVRM: GPU2 _kgspBootGspRm: SEC2_DEBUG: saved WPR2 lo=0x13f78000 hi=0x13fee00     <-- WPR2 уже «поднят»
+[   26.091152] pve kernel: NVRM: GPU2 s_executeBooterUcode_TU102: Booter failed with non-zero error code: 0x5
+[   26.091196] pve kernel: NVRM: GPU2 _kgspBootGspRm: SEC2_DEBUG: PLM[3] FEAT(0x823804) attempt=0 status=0xffff reg=0xffffffff
+[   26.091217] pve kernel: NVRM: GPU2 _kgspBootGspRm: SEC2_DEBUG: A100-minimal SS unlock: SS0=0x88888888 SS1=0x00000008
+[   26.099145] pve kernel: NVRM: GPU2 s_executeBooterUcode_TU102: Booter failed with non-zero error code: 0x5
+[   ... (ещё две такие же итерации)
+[   26.132059] pve kernel: NVRM: GPU2 kgspInitRm_IMPL: Max GSP-RM boot attempts exceeded: 4/4
+[   26.132123] pve kernel: NVRM: GPU 0000:09:00.0: RmInitAdapter failed! (0x62:0xffff:2130)
+[   26.133092] pve kernel: NVRM: GPU 0000:09:00.0: rm_init_adapter failed, device minor number 2

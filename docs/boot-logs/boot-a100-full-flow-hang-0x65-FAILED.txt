@@ -1,0 +1,32 @@
+# Неудачная попытка, 2026-11-27 00:02:36 MSK: для 0x20b5 был включён ВЕСЬ CMP-цикл
+# (12 PLM + SS0/SS1 + CFG1/LMR + SM-RECONFIG + PCIe-секция). Первые 12 запусков payload
+# отработали (0x31), затем после записи SS0/SS1, CFG1/LMR и SM-RECONFIG первый же PCIe-запуск
+# booter'а завис: falcon не остановился, через 60 s таймаут (status 0x65, mailbox 0x31 —
+# значение от прошлого запуска). Хост не «крашился» — карта не проходила probe.
+# В этой загрузке CFG1/LMR были 10gb-ветки (0x02669000/0x28a); в двух следующих загрузках
+# (00:08:58, 00:15:45) писались 0x02779000/0x20b — зависание идентичное.
+# (Журнал позже ротировался; строки сохранены из вывода journalctl -b -7 -k | grep GPU2.)
+
+[   30.277052] pve kernel: NVRM: GPU2 _kgspBootGspRm: SEC2_DEBUG: WPR meta fbSize=0x0000001400000000 wprEnd=0x00000013fff00000 heapSize=0x0000000007000000
+[   30.277164] pve kernel: NVRM: GPU2 _kgspBootGspRm: SEC2_DEBUG: saved WPR2 lo=0x1ffffe00 hi=0x00000000
+[   30.309074] pve kernel: NVRM: GPU2 s_executeBooterUcode_TU102: Booter failed with non-zero error code: 0x31
+[   30.309180] pve kernel: NVRM: GPU2 _kgspBootGspRm: SEC2_DEBUG: PLM[0] WPR_CFG(0x1fa7cc) attempt=0 status=0xffff reg=0xfffff0ff
+... (PLM[1..11] — все 0x31, все регистры записаны)
+[   30.624131] pve kernel: NVRM: GPU2 _kgspBootGspRm: SEC2_DEBUG: PLMs: FEAT=0xffffffff FBPA=0xffffffff WPR=0xffffffff WPR_CFG=0xfffff0ff
+[   30.624147] pve kernel: NVRM: GPU2 _kgspBootGspRm: SEC2_DEBUG: POST-WRITE SS0=0x88888888 SS1=0x00000008 CFG1=0x02669000 LMR=0x0000028a (devId=0x20b5)
+[   30.624164] pve kernel: NVRM: GPU2 _kgspBootGspRm: SEC2_DEBUG: A100-strapped SS0/SS1 unlock: SS0=0x88888888 SS1=0x00000008
+[   30.624184] pve kernel: NVRM: GPU2 _kgspBootGspRm: SEC2_DEBUG: SM-RECONFIG start OPT_GPC_DISABLE=0x00000020
+[   30.624198] pve kernel: NVRM: GPU2 _kgspBootGspRm: SEC2_DEBUG: SM-RECONFIG GPC0 OVR<-0xff STATUS 0x00000000->0x00000000
+... (GPC1..GPC7)
+[   30.624359] pve kernel: NVRM: GPU2 _kgspBootGspRm: SEC2_DEBUG: PCIe pre  CAP=0x00457104 CAP2=0x0180001e LC2=0x001e0003 PL=0x00140036 STAT=0x10830000 VSEC dev=0x00001801 ...
+                                        ^-- 60 секунд тишины: falcon не останавливается
+[   90.276036] pve kernel: NVRM: GPU2 _threadNodeCheckTimeout: _threadNodeCheckTimeout: currentTime: f420f08e7a000 >= f420f08e7a000
+[   90.276093] pve kernel: NVRM: GPU2 _threadNodeCheckTimeout: Timeout was set to: 4000 msecs!
+[   90.276116] pve kernel: NVRM: GPU2 kflcnWaitForHalt_TU102: Timeout waiting for Falcon to halt
+[   90.276137] pve kernel: NVRM: GPU2 s_executeBooterUcode_TU102: failed to execute Booter: status 0x65, mailbox 0x31
+[   90.276158] pve kernel: NVRM: GPU2 kgspExecuteBooterLoad_TU102: failed to execute Booter Load: 0x65
+[   90.276173] pve kernel: NVRM: GPU2 _kgspBootGspRm: SEC2_DEBUG: PCIe xp3g booter XP3G_PLM(0x8e1b0)=0xffffffff attempt=0 status=0x65 rd=0xffffff8f OVR0=0x00000000 VAL0=0x00000000 OVR3=0x00000000 VAL3=0x00000000
+[   90.280051] pve kernel: NVRM: GPU2 _threadNodeCheckTimeout: Timeout was set to: 4000 msecs!
+[   90.280118] pve kernel: NVRM: GPU2 kflcnWaitForHalt_TU102: Timeout waiting for Falcon to halt
+[   90.280133] pve kernel: NVRM: GPU2 s_executeBooterUcode_TU102: failed to execute Booter: status 0x65, mailbox 0x31
+[   90.280195] pve kernel: NVRM: GPU2 _kgspBootGspRm: SEC2_DEBUG: PCIe xp3g booter FAILED to set XP3G_PLM
