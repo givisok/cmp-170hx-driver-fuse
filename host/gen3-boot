@@ -1,30 +1,93 @@
 #!/bin/bash
 # CMP rig boot fixups:
-#   (1) A100-strapped card: REBAR 128G -> 32G + rescan (the BIOS leaves its BARs
-#       unassigned, so the kernel quirk cannot do it);
-#   (2) once all three GPUs are up, Gen3 retrain on the two CMP cards;
-#   (3) restart the vLLM CT so it re-mounts /dev/nvidia* after the rescan dance.
+#   (1) A100-strapped card (10de:20b5): REBAR 128G -> 32G + rescan (the BIOS leaves
+#       its BARs unassigned, so the kernel quirk cannot do it);
+#   (2) cards still without a driver after that. Seen when the A100-strapped card shares
+#       a PLX board with a CMP card: the BIOS then puts the board's 32-bit window inside
+#       the MMCONFIG range and gives up on the 64-bit one, so no card behind it can
+#       claim BAR0. The board is re-enumerated and the kernel plans its windows afresh;
+#   (3) once all three GPUs are up, Gen3 retrain on the CMP cards (10de:20c2), and on
+#       the A100-strapped card too if it has not reached Gen3 by itself;
+#   (4) restart the vLLM CT so it re-mounts /dev/nvidia* after the rescan dance.
+# Cards are looked up by device id, so any of them may sit in any slot.
 # Enabled as gen3.service (after multi-user.target). Log: /var/log/gen3.log
 LOG=/var/log/gen3.log
 log() { echo "$(date -Is) $*" >> $LOG; }
+# PCI addresses (0000:bb:dd.f, one per line) of the NVIDIA cards with device id $1
+by_id() { lspci -D -d 10de:"$1" 2>/dev/null | awk '{print $1}'; }
+# speed=Gen<N> width=x<M> from the card's own Link Status
+link() {
+  local sta
+  sta=$(setpci -s "$1" CAP_EXP+12.w 2>/dev/null)
+  [[ "$sta" =~ ^[0-9a-f]+$ ]] || { echo "speed=? width=?"; return; }
+  sta=$((0x$sta))
+  echo "speed=Gen$((sta & 0xf)) width=x$(((sta >> 4) & 0x1f))"
+}
+# The bus-00 port a device sits behind (itself when it is on bus 00)
+root_port() {
+  readlink -f "/sys/bus/pci/devices/$1" \
+    | awk -F/ '{for (i = 1; i < NF; i++) if ($i ~ /^pci[0-9a-f]+:[0-9a-f]+$/) {print $(i + 1); exit}}'
+}
+# Re-enumerate the board behind a root port: windows of its bridges off, the port
+# removed from the kernel, bus 00 rescanned. The kernel then sizes every window anew.
+replan() {
+  local d b
+  for d in /sys/bus/pci/devices/*; do
+    b=${d##*/}
+    [ "$b" = "$1" ] && continue
+    case "$(readlink -f "$d")" in *"/$1/"*) ;; *) continue ;; esac
+    [ "$(cat "$d/class" 2>/dev/null)" = "0x060400" ] || continue
+    setpci -s "$b" 20.w=fff0 22.w=0000 24.w=fff1 26.w=0000 28.l=ffffffff 2c.l=00000000
+  done
+  echo 1 > "/sys/bus/pci/devices/$1/remove"
+  sleep 1
+  echo 1 > /sys/bus/pci/rescan
+}
+# Our cards the driver has not taken, one per line
+undriven() {
+  local b
+  for b in $(by_id 20c2) $(by_id 20b5); do
+    [ -e "/sys/bus/pci/devices/$b/driver" ] || echo "$b"
+  done
+}
 
-# 1. REBAR fixup for 09:00.0 (waits for device)
-for i in $(seq 1 60); do [ -e /sys/bus/pci/devices/0000:09:00.0 ] && break; sleep 2; done
-if [ -e /sys/bus/pci/devices/0000:09:00.0 ]; then
-  cur=$(setpci -s 09:00.0 0xbc0.l 2>/dev/null)
+# 1. REBAR fixup for the A100-strapped card(s) (waits for the device)
+a100=""
+for i in $(seq 1 60); do a100=$(by_id 20b5); [ -n "$a100" ] && break; sleep 2; done
+[ -z "$a100" ] && log "no 10de:20b5 card found, rebar fixup skipped"
+for bdf in $a100; do
+  cur=$(setpci -s "$bdf" 0xbc0.l 2>/dev/null)
   if [ "$(( (0x$cur >> 8) & 0x3f ))" -gt 15 ] 2>/dev/null; then
-    setpci -s 09:00.0 0xbc0.l=00000f00
+    setpci -s "$bdf" 0xbc0.l=00000f00
     sleep 1
-    echo 1 > /sys/bus/pci/devices/0000:09:00.0/remove
+    echo 1 > /sys/bus/pci/devices/$bdf/remove
     sleep 1
     echo 1 > /sys/bus/pci/rescan
-    log "rebar 32G fixup done (was $cur)"
+    log "rebar 32G fixup done on $bdf (was $cur)"
+  else
+    log "rebar on $bdf: 0xbc0=$cur, no fixup needed"
   fi
-fi
+done
 
-# 2. wait until the driver has finished with all three GPUs (the A100-strapped card is
-#    probed a few seconds after the rescan and boots through the cmp_a100_ss path), then
-#    Gen3 retrain on 05/06 (idempotent if the driver already did it)
+# 2. cards still without a driver (the A100-strapped card is probed a few seconds after
+#    the rescan): re-enumerate the board behind each such card, once per root port
+for i in $(seq 1 10); do [ -z "$(undriven)" ] && break; sleep 2; done
+done_rp=" "
+for bdf in $(undriven); do
+  rp=$(root_port "$bdf")
+  [ -n "$rp" ] || { log "no root port found for $bdf, not re-enumerated"; continue; }
+  case "$done_rp" in *" $rp "*) continue ;; esac
+  done_rp="$done_rp$rp "
+  replan "$rp"
+  log "re-enumerated the board behind $rp ($bdf has no driver)"
+  sleep 3
+done
+
+# 3. wait until the driver has finished with all three GPUs, then Gen3 retrain on the
+#    CMP cards (idempotent if the driver already did it) and on the A100-strapped card
+#    when it is still below Gen3.
+#    Only cards the driver brought up are touched: without a driver, resource0 may be
+#    unassigned, or land inside the MMCONFIG window and mmap the config space instead.
 gpus=0
 for i in $(seq 1 90); do
   gpus=$(timeout 20 nvidia-smi -L 2>/dev/null | grep -c '^GPU ')
@@ -33,12 +96,21 @@ for i in $(seq 1 90); do
 done
 log "nvidia-smi sees $gpus GPU(s)"
 sleep 2
-for bdf in 0000:05:00.0 0000:06:00.0; do
-  /usr/bin/python3 /root/gen3_retrain.py $bdf 2>&1 | grep -E '^after:' | sed "s/^/$bdf /" >> $LOG
+for bdf in $(by_id 20c2); do
+  [ -e /sys/bus/pci/devices/$bdf/driver ] || { log "skip retrain on $bdf: no driver bound"; continue; }
+  /usr/bin/python3 /root/gen3_retrain.py "$bdf" 2>&1 | grep -E '^after:' | sed "s/^/$bdf /" >> $LOG
 done
+for bdf in $(by_id 20b5); do
+  [ -e /sys/bus/pci/devices/$bdf/driver ] || { log "skip retrain on $bdf: no driver bound"; continue; }
+  sta=$(setpci -s "$bdf" CAP_EXP+12.w 2>/dev/null)
+  if ! [[ "$sta" =~ ^[0-9a-f]+$ ]] || [ $((0x$sta & 0xf)) -lt 3 ]; then
+    /usr/bin/python3 /root/gen3_retrain.py "$bdf" 2>&1 | grep -E '^after:' | sed "s/^/$bdf /" >> $LOG
+  fi
+done
+for bdf in $(by_id 20c2) $(by_id 20b5); do log "link $bdf $(link "$bdf")"; done
 log "gen3 retrain done"
 
-# 3. restart the vLLM CT so it re-mounts /dev/nvidia* after the rescan dance
+# 4. restart the vLLM CT so it re-mounts /dev/nvidia* after the rescan dance
 sleep 5
 if pct status 101 2>/dev/null | grep -q running; then
   pct reboot 101 2>/dev/null

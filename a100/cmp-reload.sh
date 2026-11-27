@@ -60,17 +60,17 @@ modprobe nvidia-drm 2>&1 | tee -a "$LOG"
 sleep 2
 
 journalctl -k --since "$start" --no-pager -o short-monotonic 2>/dev/null \
-  | grep -E "NVRM: GPU[0-9]|nvidia 0000:0[59]:00.0: (enabling|probe)" \
+  | grep -E "NVRM: GPU[0-9]|nvidia 0000:0[0-9a-f]:00.0: (enabling|probe)" \
   | grep -v -E "xp3g booter|s_executeBooterUcode|failed to execute Booter Load: 0xffff|LATE_PMA: region\[|GetNameString" \
   | cut -c1-320 > "$KLOG"
 grep -E "POST-WRITE|WPR meta updated|normal BooterLoad|POST-BooterLoad|SEC2_DEBUG_HEAP|numFBRegions|Max GSP-RM|RmInitAdapter|A100 SS|late PMA|static-info" "$KLOG" \
   | cut -c1-280 | tee -a "$LOG"
 echo "--- params / registers ---" | tee -a "$LOG"
 echo "cmp_a100_ss=$(cat /sys/module/nvidia/parameters/cmp_a100_ss) cmp_lmr=$(cat /sys/module/nvidia/parameters/cmp_lmr)" | tee -a "$LOG"
-python3 /root/a100-work/gpu_regs.py | grep -o -E "^0000:0[0-9]:00.0|SS0=0x[0-9a-f]+|LMR=0x[0-9a-f]+" | paste -sd' ' | sed 's/ 0000:/\n0000:/g' | tee -a "$LOG"
+python3 /root/a100-work/gpu_regs.py | grep -o -E "^0000:0[0-9a-f]:00.0|SS0=0x[0-9a-f]+|LMR=0x[0-9a-f]+" | paste -sd' ' | sed 's/ 0000:/\n0000:/g' | tee -a "$LOG"
 timeout 60 nvidia-smi --query-gpu=index,name,memory.total,pcie.link.gen.current,pcie.link.width.current \
   --format=csv,noheader 2>&1 | tee -a "$LOG"
-for b in 0000:05:00.0 0000:06:00.0; do
+for b in $(lspci -D -d 10de:20c2 | awk '{print $1}'); do    # CMP cards by device id (any slot)
     python3 /root/gen3_retrain.py "$b" 2>&1 | grep -E '^after:' | sed "s/^/  $b /" | tee -a "$LOG"
 done
 
