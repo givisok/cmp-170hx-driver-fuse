@@ -2,10 +2,10 @@
 # CMP rig boot fixups:
 #   (1) A100-strapped card (10de:20b5): REBAR 128G -> 32G + rescan (the BIOS leaves
 #       its BARs unassigned, so the kernel quirk cannot do it);
-#   (2) cards still without a driver after that. Seen when the A100-strapped card shares
-#       a PLX board with a CMP card: the BIOS then puts the board's 32-bit window inside
-#       the MMCONFIG range and gives up on the 64-bit one, so no card behind it can
-#       claim BAR0. The board is re-enumerated and the kernel plans its windows afresh;
+#   (2) cards still without a driver after that. Seen in every layout tried without the GT 520:
+#       the kernel moves the 32-bit window of the board that carries the A100-strapped card
+#       inside the MMCONFIG range, so no card behind it can claim BAR0. The board is
+#       re-enumerated and the kernel plans its windows afresh;
 #   (3) once all three GPUs are up, Gen3 retrain on the CMP cards (10de:20c2), and on
 #       the A100-strapped card too if it has not reached Gen3 by itself;
 #   (4) restart the vLLM CT so it re-mounts /dev/nvidia* after the rescan dance.

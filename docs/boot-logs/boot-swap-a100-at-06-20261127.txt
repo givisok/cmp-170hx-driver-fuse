@@ -491,3 +491,44 @@ e0000000-fbffbfff : PCI Bus 0000:00
 [   49.923272] pve kernel: pcieport 0000:04:10.0: disabling bridge window [io  size 0x0000 disabled] to [bus 05] (unused)
 [   49.923450] pve kernel: pcieport 0000:03:00.0: disabling bridge window [io  size 0x0000 disabled] to [bus 04-06] (unused)
 [   49.923605] pve kernel: pcieport 0000:00:03.0: disabling bridge window [io  size 0x0000 disabled] to [bus 03-06] (unused)
+
+## 6. Cards put back 2026-11-28 (CMP@05, CMP@06, A100@09; GT 520 stays out), unattended boot 12:38:48
+### /var/log/gen3.log
+12:39:19+03:00 rebar 32G fixup done on 0000:09:00.0 (was 00001101)
+12:39:40+03:00 re-enumerated the board behind 0000:00:02.0 (0000:09:00.0 has no driver)
+12:39:43+03:00 nvidia-smi sees 3 GPU(s)
+12:39:52+03:00 link 0000:05:00.0 speed=Gen3 width=x16
+12:39:52+03:00 link 0000:06:00.0 speed=Gen3 width=x16
+12:39:52+03:00 link 0000:09:00.0 speed=Gen3 width=x8
+12:39:52+03:00 gen3 retrain done
+12:40:13+03:00 CT101 rebooted
+12:40:13+03:00 gen3-boot finished
+### kernel log: without the GT 520 the board#2 window lands inside MMCONFIG in this layout too
+[   11.080739] pve kernel: pci 0000:00:02.0: bridge window [mem 0xfb500000-0xfb5fffff]: releasing
+[   11.081292] pve kernel: pci 0000:00:02.0: bridge window [mem 0xe0000000-0xe10fffff]: assigned
+[   11.081505] pve kernel: pci 0000:00:02.0: bridge window [mem 0xe0000000-0xe10fffff]: releasing
+[   11.081988] pve kernel: pci 0000:00:02.0: bridge window [mem 0xe0000000-0xe10fffff]: assigned
+[   11.083083] pve kernel: pci 0000:07:00.0: bridge window [mem 0xe0000000-0xe0ffffff]: assigned
+[   11.083271] pve kernel: pci 0000:07:00.0: BAR 0 [mem 0xe1000000-0xe103ffff]: assigned
+[   11.083490] pve kernel: pci 0000:07:00.0: bridge window [mem 0xe0000000-0xe0ffffff]: releasing
+[   11.084213] pve kernel: pci 0000:07:00.0: bridge window [mem 0xe0000000-0xe0ffffff]: assigned
+[   11.084433] pve kernel: pci 0000:07:00.0: BAR 0 [mem 0xe1000000-0xe103ffff]: assigned
+[   11.084940] pve kernel: pci 0000:08:10.0: bridge window [mem 0xe0000000-0xe0ffffff]: assigned
+[   11.085163] pve kernel: pci 0000:08:10.0: bridge window [mem 0xe0000000-0xe0ffffff]: releasing
+[   11.085753] pve kernel: pci 0000:08:10.0: bridge window [mem 0xe0000000-0xe0ffffff]: assigned
+[   11.086845] pve kernel: pci 0000:09:00.0: BAR 0 [mem 0xe0000000-0xe0ffffff]: assigned
+[   11.087991] pve kernel: pci 0000:09:00.0: BAR 0 [mem 0xe0000000-0xe0ffffff]: assigned
+[   11.919257] pve kernel: NVRM: request_mem_region failed for 16M @ 0xe0000000. This can
+[   11.919300] pve kernel: nvidia 0000:09:00.0: probe with driver nvidia failed with error -1
+[   30.763157] pve kernel: pci 0000:09:00.0: BAR 0 [mem 0xe0000000-0xe0ffffff]: assigned
+[   30.763428] pve kernel: NVRM: request_mem_region failed for 16M @ 0xe0000000. This can
+[   30.763457] pve kernel: nvidia 0000:09:00.0: probe with driver nvidia failed with error -1
+[   52.289383] pve kernel: pci 0000:00:02.0: bridge window [mem 0xf0000000-0xf10fffff]: assigned
+[   52.289710] pve kernel: pci 0000:07:00.0: bridge window [mem 0xf0000000-0xf0ffffff]: assigned
+[   52.289877] pve kernel: pci 0000:07:00.0: BAR 0 [mem 0xf1000000-0xf103ffff]: assigned
+[   52.290304] pve kernel: pci 0000:08:10.0: bridge window [mem 0xf0000000-0xf0ffffff]: assigned
+[   52.291013] pve kernel: pci 0000:09:00.0: BAR 0 [mem 0xf0000000-0xf0ffffff]: assigned
+### result
+#    links: CMP@05 Gen3 x16, CMP@06 Gen3 x16, A100@09 Gen3 x8 (x4 in slot 06 the day before -> half the card's lanes are all it has)
+#    vLLM ready 12:43:59 (5 min 11 s after power-on), restarts=0, KV pool 8,141,786 tokens / 7.76x / (1728, 1728, 1728, 1728, 8, 1728); smoke request http 200 in 0.23 s
+#    ranks: rank0 -> CMP 112 SM @05, rank1 -> CMP 106 SM @06, rank2 -> A100 @09
