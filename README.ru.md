@@ -165,9 +165,32 @@ grep -a "link " /var/log/gen3.log                          # скорость и
 
 ## Лицензия и благодарности
 
-GPL-2.0 (см. `LICENSE`), как у базового проекта. Базовый проект и авторы фич —
-[amoghmunikote/cmpunlocker](https://github.com/amoghmunikote/cmpunlocker) (v0.5, коммит `17535a0`)
-и его [CREDITS.md](cmpunlocker/CREDITS.md). Идея volatile Gen3-ретрейна и нативного P2P —
-[scrameta/cmpunlocker_fused](https://github.com/scrameta/cmpunlocker_fused) (сам форк на этих картах
-не заработал). Сканирование фьюзов — [matstatman/gpcprobe](https://github.com/matstatman/gpcprobe).
-Драйвер — [NVIDIA/open-gpu-kernel-modules](https://github.com/NVIDIA/open-gpu-kernel-modules) 615.71.09.
+GPL-2.0 (см. `LICENSE`), как у базового проекта.
+
+### Что откуда взято
+
+| Источник | Что взято | Где лежит |
+|---|---|---|
+| [amoghmunikote/cmpunlocker](https://github.com/amoghmunikote/cmpunlocker) **v0.5** (тег `v0.5`, коммит `17535a0`) | Всё дерево драйвера: открытие PLM через SEC2-загрузчик, запись SS0/SS1 (SM-скорость), геометрия памяти, Gen2-ретрейн, ECC, BAR1, JTAG, инструменты VFIO-пасстру, установщик. Всё, что не перечислено в [cmpunlocker/LOCAL-CHANGES.md](cmpunlocker/LOCAL-CHANGES.md), — байт-в-байт как в upstream. | `cmpunlocker/` |
+| [bayley/cmpunlocker](https://github.com/bayley/cmpunlocker) | Патчи BAR1-P2P `0011`, `0013`, `0015` — как есть, байт-в-байт. Собираются, но на этом железе P2P не работает. | `cmpunlocker/driver/patches/` (копии в `p2p-parked/`) |
+| [scrameta/cmpunlocker_fused](https://github.com/scrameta/cmpunlocker_fused) | Идея volatile-ретрейна и нативного P2P; `host/gen3_retrain.py` повторяет регистровую последовательность его патча ретрейна при probe со значениями Gen3. Сам форк на этих картах не заработал (кривой патч, Booter 0x29). | `host/gen3_retrain.py` |
+| [matstatman/gpcprobe](https://github.com/matstatman/gpcprobe) | Эталон сканирования фьюзов: регистры `OPT_*`, по которым видно, какие блоки выключены SKU-сегментацией, а какие дефектны. | использовались при скане фьюзов 2026-11-14 |
+| [sayhellotojungle/cmp170hx-ffcalc](https://github.com/sayhellotojungle/cmp170hx-ffcalc) | Сканирование фьюзов и планирование прожига — те же регистры `OPT_*`. | то же; данные скана и планы прожига — в [givisok/qwen38-flash-next-170hx-recipe](https://github.com/givisok/qwen38-flash-next-170hx-recipe), `runs/ffcalc-20261114` |
+| [NVIDIA/open-gpu-kernel-modules](https://github.com/NVIDIA/open-gpu-kernel-modules) 615.71.09 | Драйвер, на который накладываются все патчи; юзерспейс — NVIDIA .run той же версии. | скачивается при сборке `cmpunlocker/driver/build.sh` |
+| [Proxmox pve-kernel](http://git.proxmox.com/git/pve-kernel.git) | База ядра (`7.0.14`). | собирается с двумя патчами из `kernel/` |
+
+### Написано на этом стенде
+
+* Патчи ядра `9901`/`9902` (BAR1 в 32 GB до нумерации шины), загрузочный скрипт `host/gen3-boot`,
+  билдер модулей `host/cmpunlocker-kernel-modules` с его хуками.
+* Локальные правки дерева драйвера — список в
+  [cmpunlocker/LOCAL-CHANGES.md](cmpunlocker/LOCAL-CHANGES.md). В том числе разблокировка
+  SM-скорости A100-карты (`cmp_a100_ss`): она расширяет upstream-патч `sec2-postbl-plm-ss-cfg.patch`
+  тем же механизмом SEC2; значения Gen3; геометрия 80 GiB и `cmp_lmr`.
+* Инструменты в `a100/` и замеры в `bench/`.
+
+### Собственные благодарности upstream
+
+[cmpunlocker/CREDITS.md](cmpunlocker/CREDITS.md): [asm64-hooligan](https://github.com/asm64-hooligan/) — полный размер
+BAR1 (64 GB); [lesj0610](https://github.com/lesj0610/) — профилирование GPU. История самой разблокировки — видео по
+ссылке в [cmpunlocker/docs/HISTORY.md](cmpunlocker/docs/HISTORY.md).

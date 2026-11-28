@@ -174,9 +174,32 @@ inside a CUDA container; stop vLLM for the test).
 
 ## License and credits
 
-GPL-2.0 (see `LICENSE`), the same as the base project. The base project and the authors of its
-features are [amoghmunikote/cmpunlocker](https://github.com/amoghmunikote/cmpunlocker) (v0.5, commit
-`17535a0`) and its [CREDITS.md](cmpunlocker/CREDITS.md). The idea of the volatile Gen3 retrain and of
-native P2P is [scrameta/cmpunlocker_fused](https://github.com/scrameta/cmpunlocker_fused) (the fork
-itself never worked on these cards). Fuse scanning — [matstatman/gpcprobe](https://github.com/matstatman/gpcprobe).
-Driver — [NVIDIA/open-gpu-kernel-modules](https://github.com/NVIDIA/open-gpu-kernel-modules) 615.71.09.
+GPL-2.0 (see `LICENSE`), the same as the base project.
+
+### What was taken from where
+
+| Source | What was taken | Where it lives |
+|---|---|---|
+| [amoghmunikote/cmpunlocker](https://github.com/amoghmunikote/cmpunlocker) **v0.5** (tag `v0.5`, commit `17535a0`) | The entire driver tree: the PLM unlock through the SEC2 bootloader, the SS0/SS1 SM-speed write, memory geometry, PCIe Gen2 retrain, ECC, BAR1, JTAG, VFIO passthrough tools, the installer. Everything not listed in [cmpunlocker/LOCAL-CHANGES.md](cmpunlocker/LOCAL-CHANGES.md) is byte-identical to upstream. | `cmpunlocker/` |
+| [bayley/cmpunlocker](https://github.com/bayley/cmpunlocker) | The BAR1 P2P patches `0011`, `0013`, `0015`, taken as is (byte-identical). They build, but P2P does not work on this hardware. | `cmpunlocker/driver/patches/` (copies in `p2p-parked/`) |
+| [scrameta/cmpunlocker_fused](https://github.com/scrameta/cmpunlocker_fused) | The idea of the volatile retrain and of native P2P; `host/gen3_retrain.py` repeats the register sequence of its probe-time retrain patch with the Gen3 values. The fork itself never worked on these cards (a broken patch, Booter 0x29). | `host/gen3_retrain.py` |
+| [matstatman/gpcprobe](https://github.com/matstatman/gpcprobe) | The reference for fuse scanning: the `OPT_*` registers it reads show which blocks are disabled by SKU segmentation and which are defective. | used for the 2026-11-14 fuse scan |
+| [sayhellotojungle/cmp170hx-ffcalc](https://github.com/sayhellotojungle/cmp170hx-ffcalc) | Fuse scanning and burn planning, reading the same `OPT_*` registers. | same; the scan data and burn plans are in [givisok/qwen38-flash-next-170hx-recipe](https://github.com/givisok/qwen38-flash-next-170hx-recipe), `runs/ffcalc-20261114` |
+| [NVIDIA/open-gpu-kernel-modules](https://github.com/NVIDIA/open-gpu-kernel-modules) 615.71.09 | The driver every patch is applied to; the user space comes from NVIDIA's `.run` of the same version. | downloaded at build time by `cmpunlocker/driver/build.sh` |
+| [Proxmox pve-kernel](http://git.proxmox.com/git/pve-kernel.git) | The kernel base (`7.0.14`). | built with the two patches in `kernel/` |
+
+### Written for this rig
+
+* The kernel patches `9901`/`9902` (BAR1 at 32 GB before bus numbering), the boot script
+  `host/gen3-boot`, the module builder `host/cmpunlocker-kernel-modules` with its hooks.
+* The local changes to the driver tree, listed in
+  [cmpunlocker/LOCAL-CHANGES.md](cmpunlocker/LOCAL-CHANGES.md). Among them the A100 SM-speed
+  unlock (`cmp_a100_ss`), which extends upstream's `sec2-postbl-plm-ss-cfg.patch` with the same
+  SEC2 mechanism; the Gen3 values; the 80 GiB geometry and `cmp_lmr`.
+* The tools in `a100/` and the benchmarks in `bench/`.
+
+### Upstream's own credits
+
+[cmpunlocker/CREDITS.md](cmpunlocker/CREDITS.md): [asm64-hooligan](https://github.com/asm64-hooligan/) — full BAR1 size
+(64 GB); [lesj0610](https://github.com/lesj0610/) — GPU profiling. The history of the unlock itself is the video
+linked in [cmpunlocker/docs/HISTORY.md](cmpunlocker/docs/HISTORY.md).
