@@ -1,115 +1,138 @@
 # cmp-170hx-driver-fuse
 
-Патченный драйвер NVIDIA и загрузочные фиксы для стенда из **3× NVIDIA CMP 170HX (GA100)** после
-коммерческого прожига OTP-фьюзов: 80 GiB HBM2e на каждой карте, 106–112 SM, PCIe Gen3 и полная
-SM-производительность — включая карту, которую прожгли/перестращили под **A100 PCIe 80GB**.
+**English** | [Русский](README.ru.md)
 
-Всё, что здесь лежит, работает на хосте Proxmox прямо сейчас (2026-11-27): nvidia-open
-**615.71.09** + модули из [amoghmunikote/cmpunlocker v0.5](https://github.com/amoghmunikote/cmpunlocker)
-с локальными патчами и ядро `7.0.14-29-z2p-pve` собственной сборки.
+> **Read this first: the cards must be fuse-burned.** Everything in this repository is built for
+> NVIDIA CMP 170HX cards **after the OTP fuse burn** (a commercial unlock; the burn itself is not part
+> of this repository, and it cannot be undone — OTP fuses are written once). The burn is what turns a
+> stock card (8 GiB, 74 SM, PCIe Gen1/Gen2) into the hardware described below: 80 GiB of HBM2e,
+> 106–112 SM, PCIe Gen3 and full SM throughput. On an unburned card none of the results, module
+> options or boot fixes documented here apply — that is a different, far more modest configuration
+> (64 GiB, 74 SM, Gen2).
 
-## Итог
+Patched NVIDIA driver and boot fixes for a rig of **3× NVIDIA CMP 170HX (GA100)** after a commercial
+OTP fuse burn: 80 GiB of HBM2e per card, 106–112 SM, PCIe Gen3 and full SM throughput — including one
+card that was burned/re-strapped as an **A100 PCIe 80GB**.
+
+Everything here runs on the Proxmox host right now (2026-11-28): nvidia-open **615.71.09** + modules
+from [amoghmunikote/cmpunlocker v0.5](https://github.com/amoghmunikote/cmpunlocker) with local patches,
+and a self-built kernel `7.0.14-29-z2p-pve`.
+
+## Result
 
 | | GPU0 — `05:00.0` | GPU1 — `06:00.0` | GPU2 — `09:00.0` |
 |---|---|---|---|
-| Стряп | CMP 170HX (`10de:20c2`) | CMP 170HX (`10de:20c2`) | **A100 PCIe 80GB** (`10de:20b5`) |
+| Strap | CMP 170HX (`10de:20c2`) | CMP 170HX (`10de:20c2`) | **A100 PCIe 80GB** (`10de:20b5`) |
 | UUID | `GPU-2f74a495…` | `GPU-295351c7…` | `GPU-ec614963…` |
-| Память (nvidia-smi / CUDA) | 81920 MiB / 79 GiB | 81920 MiB / 79 GiB | 81920 MiB / 79 GiB |
+| Memory (nvidia-smi / CUDA) | 81920 MiB / 79 GiB | 81920 MiB / 79 GiB | 81920 MiB / 79 GiB |
 | SM | 112 | 106 | 106 |
 | PCIe | Gen3 x16 | Gen3 x16 | Gen3 x8 (LnkCap x16) |
-| Макс. SM-клок / лимит мощности | 1695 MHz / 250 W | 1695 MHz / 250 W | 1410 MHz / 300 W |
+| Max SM clock / power limit | 1695 MHz / 250 W | 1695 MHz / 250 W | 1410 MHz / 300 W |
 | matmul 8192² fp16 | ~212 TFLOPS | ~214 TFLOPS | **~214 TFLOPS** |
 
-GPU2 до фикса считала в **23 раза медленнее** (9.2 TFLOPS, matmul 119 мс вместо 5.1 мс), и модель
-на конвейере PP=3 постоянно ждала именно этот рэнк. А на CMP-паре программа могла занять
-только 63 ГиБ из 80. После двух фиксов все три карты одинаковые: ~214 TFLOPS и 79 ГиБ.
+Before the fix GPU2 computed **23× slower** (9.2 TFLOPS, an 8192² matmul in 119 ms instead of 5.1 ms),
+and the model on the PP=3 pipeline kept waiting on exactly that rank. On the CMP pair a program could
+only use 63 GiB out of 80. After two fixes all three cards are alike: ~214 TFLOPS and 79 GiB.
 
-## Что здесь лежит
+## What is in here
 
 ```
-README.md                        этот файл: что делали, как устроено, как воспроизвести
-LICENSE                          GPL-2.0 (базовый проект cmpunlocker — GPL-2.0)
-cmpunlocker/                     рабочее дерево драйвера (= /root/cmpunlocker-0.5 на хосте)
-  driver/patches/                все патчи против open-gpu-kernel-modules 615.71.09
-  driver/build.sh                сборка модулей (профиль 80gb по умолчанию)
-  common/constants.yaml          профили памяти; от него зависит валидатор read-constants.py
-  LOCAL-CHANGES.md               чем это дерево отличается от upstream v0.5
-kernel/                          патчи для ядра Proxmox (z2p) и правка Makefile
-host/                            то, что живёт на хосте: сервисы, скрипты загрузки, modprobe.d
-  HOST-README.md                 эксплуатационная документация хоста (история, ловушки, обновления)
-a100/                            инструменты, которыми нашли и починили SM-скорость A100-карты
-bench/gpubench.py                замер SM-производительности по картам
+README.md                        this file, in English
+README.ru.md                     the same in Russian: what was done, how it works, how to reproduce
+LICENSE                          GPL-2.0 (the base project, cmpunlocker, is GPL-2.0)
+cmpunlocker/                     driver working tree (= /root/cmpunlocker-0.5 on the host)
+  driver/patches/                all patches against open-gpu-kernel-modules 615.71.09
+  driver/build.sh                module build (80gb profile by default)
+  common/constants.yaml          memory profiles; the read-constants.py validator depends on it
+  LOCAL-CHANGES.md               how this tree differs from upstream v0.5
+kernel/                          patches for the Proxmox kernel (z2p) and a Makefile fix
+host/                            what lives on the host: services, boot scripts, modprobe.d
+  HOST-README.md                 host operations documentation: history, traps, upgrades
+a100/                            tools used to find and fix the SM speed of the A100 card
+bench/gpubench.py                SM throughput measurement per card
+bench/pciebench.py               PCIe bandwidth per card (not yet run on the rig)
 docs/
-  a100-sm-speed-unlock.md        разбор: почему карта была медленной и как это чинится
-  memory-80g-cmp.md              разбор: почему на CMP-паре было 63 ГиБ и как стало 79
-  rig-and-history.md             железо, топология, хронология от стока до текущего состояния
-  boot-logs/                     журналы загрузок: рабочий путь и две неудачные попытки
+  a100-sm-speed-unlock.md        why the card was slow and how it is fixed
+  memory-80g-cmp.md              why the CMP pair had 63 GiB and how it became 79
+  rig-and-history.md             hardware, topology, timeline from stock to the current state
+  boot-logs/                     boot logs: the working path, failed attempts, the card swap test
 ```
 
-## Что мы делали
+The documents under `docs/`, `host/`, `a100/` and `kernel/` are written in Russian.
 
-Коротко; подробно — в [docs/rig-and-history.md](docs/rig-and-history.md).
+## What we did
 
-1. **Исходная точка.** 3× CMP 170HX: 8 GiB, 74 SM, PCIe Gen1/Gen2. Скан фьюзов (2026-11-14) показал,
-   что часть блоков выключена SKU-сегментацией, а часть — дефектна.
-2. **Драйвер под непрожжённые карты.** cmpunlocker v0.5 + локальные патчи: 64 GiB, BAR1 32 GB
-   (quirk ядра 9901/9902, сборка `-z2p`), Gen2-ретрейн, автопересборка модулей под новые ядра.
-3. **Прожиг фьюзов.** Сначала сами дожгли память (64 → 80 GiB), потом отдали карты в сервис
-   («максимум, что возможно»): получилось 112/106/106 SM, 80 GiB везде, Gen3-фьюзы на паре 0x20c2,
-   и одну карту (ec61) полностью перестращили под A100 PCIe 80GB.
-4. **Пересборка под новое состояние.** Форк scrameta/cmpunlocker_fused не подошёл
-   (кривой патч + Booter 0x29 на прожжённых картах). Остались на v0.5: профиль 80gb, Gen3-значения
-   в `pcie-gen2.patch`, загрузочный фикс BAR1 для A100-карты (BIOS не раскладывает её BAR'ы),
-   Gen3-ретрейн CMP-пары.
-5. **Симптом.** Модель стала сильно медленнее: A100-карта выдаёт 9.2 TFLOPS.
-6. **Диагноз.** У карты задушена SM-скорость: регистры `FEATURE_OVERRIDE_SM_SPEED`
-   (SS0 `0x82381c` / SS1 `0x823820`) на стоке равны 0, а у CMP-пар патч cmpunlocker пишет туда
-   `0x88888888` / `0x8`. Запись закрыта PLM, открыть его можно только через SEC2-загрузчик.
-7. **Фикс.** Параметр модуля `cmp_a100_ss=1`: до загрузки GSP открываем нужные PLM'ы тем же
-   механизмом, что и cmpunlocker, восстанавливаем WPR2, пишем SS0/SS1 — и карта грузится штатно.
-8. **Проверка.** Холодная загрузка, замер 214 TFLOPS, vLLM на трёх картах поднимается сам.
-9. **Память на CMP-паре (63 → 79 ГиБ).** Драйвер берёт размер памяти из регистра
-   `NV_PFB_PRI_MMU_LOCAL_MEMORY_RANGE`, а туда писали 64 ГиБ по профилю для непрожжённых карт.
-   Параметр `cmp_lmr=0x28b` (80 ГиБ, как у настоящей A100) + тест памяти паттернами на весь объём.
-   Подробно — в [docs/memory-80g-cmp.md](docs/memory-80g-cmp.md).
+The short version; details in [docs/rig-and-history.md](docs/rig-and-history.md).
 
-## Как это загружается
+1. **Starting point.** 3× CMP 170HX: 8 GiB, 74 SM, PCIe Gen1/Gen2. A fuse scan (2026-11-14) showed
+   that some blocks were disabled by SKU segmentation and some were defective.
+2. **Driver for unburned cards.** cmpunlocker v0.5 + local patches: 64 GiB, BAR1 32 GB (kernel quirks
+   9901/9902, `-z2p` build), Gen2 retrain, automatic module rebuilds for new kernels.
+3. **Fuse burn.** First we finished the memory ourselves (64 → 80 GiB), then gave the cards to a
+   service ("the maximum possible"): the result is 112/106/106 SM, 80 GiB everywhere, Gen3 fuses on
+   the 0x20c2 pair, and one card (ec61) fully re-strapped as an A100 PCIe 80GB.
+4. **Rebuild for the new state.** The scrameta/cmpunlocker_fused fork did not fit (a broken patch +
+   Booter 0x29 on the burned cards). Stayed on v0.5: 80gb profile, Gen3 values in `pcie-gen2.patch`,
+   a boot-time BAR1 fix for the A100 card (the BIOS does not lay out its BARs), Gen3 retrain of the
+   CMP pair.
+5. **Symptom.** The model became much slower: the A100 card delivers 9.2 TFLOPS.
+6. **Diagnosis.** The card's SM speed is throttled: the `FEATURE_OVERRIDE_SM_SPEED` registers
+   (SS0 `0x82381c` / SS1 `0x823820`) are 0 on stock, while on the CMP pair the cmpunlocker patch
+   writes `0x88888888` / `0x8` there. The write is protected by PLM, which can only be opened through
+   the SEC2 bootloader.
+7. **Fix.** Module parameter `cmp_a100_ss=1`: before the GSP is loaded we open the needed PLMs with
+   the same mechanism cmpunlocker uses, restore WPR2, write SS0/SS1 — and the card boots normally.
+8. **Verification.** Cold boot, 214 TFLOPS measured, vLLM on the three cards comes up by itself.
+9. **Memory on the CMP pair (63 → 79 GiB).** The driver takes the memory size from the
+   `NV_PFB_PRI_MMU_LOCAL_MEMORY_RANGE` register, and 64 GiB was written there following the profile
+   for unburned cards. Parameter `cmp_lmr=0x28b` (80 GiB, like a real A100) + a full-size pattern
+   memory test. Details in [docs/memory-80g-cmp.md](docs/memory-80g-cmp.md).
+
+## How it boots
+
+Cards are looked up by device id, so they can sit in any slot.
 
 ```
 BIOS (Above 4G Decoding = Enabled)
- └─ ядро 7.0.14-29-z2p-pve
-     ├─ quirk 9902: BAR1 CMP-пары → 32 GB до нумерации шины      (A100-карте не срабатывает: BIOS
-     │                                                             оставляет её BAR0 неназначенным)
+ └─ kernel 7.0.14-29-z2p-pve
+     ├─ quirk 9902: BAR1 of the CMP cards → 32 GB before bus numbering   (does not fire for the
+     │                                                                     A100 card: the BIOS
+     │                                                                     leaves its BAR0 unassigned)
      ├─ modprobe nvidia  (options nvidia cmp_a100_ss=1 cmp_lmr=0x28b)
-     │    ├─ CMP-пара: полный цикл cmpunlocker (PLM, SS0/SS1, CFG1/LMR=80 GiB, SM-RECONFIG, PCIe)
-     │    └─ A100-карта: не прошла probe — BAR1 = 0 MB
+     │    ├─ CMP cards: full cmpunlocker cycle (PLM, SS0/SS1, CFG1/LMR=80 GiB, SM-RECONFIG, PCIe)
+     │    └─ A100 card: fails its first probe — the BIOS did not assign its BARs
      └─ gen3.service → /usr/local/sbin/gen3-boot
-          1. A100-карта: REBAR 128G → 32G (setpci 0xbc0) + remove/rescan
-             → probe → путь cmp_a100_ss (PLM → restore WPR2 → SS0/SS1 → GSP)
-          2. ждёт все 3 карты → Gen3-ретрейн 05/06 (/root/gen3_retrain.py)
-          3. перезапуск CT 101 (vLLM), чтобы перемонтировались /dev/nvidia*
+          1. A100 card: REBAR 128G → 32G (setpci 0xbc0) + remove/rescan
+             → probe → the cmp_a100_ss path (PLM → restore WPR2 → SS0/SS1 → GSP)
+          1a. a card still without a driver → its PLX board is re-enumerated
+              (bridge windows off, root port removed, rescan — the kernel then plans the windows
+               afresh; otherwise the board's 32-bit window lands inside the MMCONFIG range)
+          2. waits for all 3 cards → Gen3 retrain of the CMP cards (/root/gen3_retrain.py)
+          3. restart CT 101 (vLLM) so that /dev/nvidia* are mounted again
 ```
 
-## Воспроизведение
+## Reproduction
 
-Скрипты и пути рассчитаны на раскладку upstream: драйвер в `/root/cmpunlocker-0.5`, инструменты в
-`/root/a100-work`. Порядок на такой же машине:
+Scripts and paths assume the upstream layout: the driver in `/root/cmpunlocker-0.5`, tools in
+`/root/a100-work`. The order on an identical machine:
 
-1. **Ядро.** Патчи из `kernel/` в `patches/kernel/` исходников pve-kernel, `KREL_EXTRA=-z2p`,
-   сборка `.deb` — процедура и ловушки в [host/HOST-README.md](host/HOST-README.md).
-2. **Модули.** Дерево `cmpunlocker/` → `/root/cmpunlocker-0.5` (юзерспейс — NVIDIA .run той же
-   версии), затем
+1. **Kernel.** Patches from `kernel/` into `patches/kernel/` of the pve-kernel sources,
+   `KREL_EXTRA=-z2p`, build the `.deb` — the procedure and the traps are in
+   [host/HOST-README.md](host/HOST-README.md).
+2. **Modules.** The `cmpunlocker/` tree → `/root/cmpunlocker-0.5` (user space: the NVIDIA .run of the
+   same version), then
    `cp host/cmpunlocker-kernel-modules /usr/local/sbin/ && /usr/local/sbin/cmpunlocker-kernel-modules --kernel "$(uname -r)" --force`
-   — соберёт модули под текущее ядро, не трогая работающий драйвер. Хук `host/kernel-postinst/`
-   и `host/systemd/cmpunlocker-modules.{service,timer}` делают то же под новые ядра.
-3. **Опции модуля.** `cp host/modprobe.d/cmpunlocker-a100-ss.conf /etc/modprobe.d/`:
-   `cmp_a100_ss=1` (SM-скорость A100-карты) и `cmp_lmr=0x28b` (80 ГиБ на CMP-картах после прожига;
-   для непрожжённых карт `cmp_lmr` не нужен — у них реально 64 ГиБ).
-4. **Загрузочные фиксы.** `cp host/gen3_retrain.py /root/`, `cp host/gen3-boot /usr/local/sbin/`,
+   — builds the modules for the current kernel without touching the running driver. The
+   `host/kernel-postinst/` hook and `host/systemd/cmpunlocker-modules.{service,timer}` do the same
+   for new kernels.
+3. **Module options.** `cp host/modprobe.d/cmpunlocker-a100-ss.conf /etc/modprobe.d/`:
+   `cmp_a100_ss=1` (SM speed of the A100 card) and `cmp_lmr=0x28b` (80 GiB on CMP cards after the
+   burn; for unburned cards `cmp_lmr` is not needed — they really have 64 GiB).
+4. **Boot fixes.** `cp host/gen3_retrain.py /root/`, `cp host/gen3-boot /usr/local/sbin/`,
    `cp host/systemd/gen3.service /etc/systemd/system/ && systemctl enable gen3.service`.
 5. `reboot`.
 
-## Проверка после загрузки
+## Checking after boot
 
 ```bash
 cat /sys/module/nvidia/parameters/cmp_a100_ss            # 1
@@ -120,36 +143,40 @@ journalctl -b -k | grep -E "GPU2.*(A100|BooterLoad)"
 #  normal BooterLoad status=0x0
 journalctl -b -k | grep -E "POST-WRITE|SEC2_DEBUG_HEAP"       # CMP: LMR=0x28b, publicBytes=0x13d30f0000
 journalctl -b -u gen3.service                              # finished, CT101 rebooted
+grep -a "link " /var/log/gen3.log                          # speed and width of every card's link
 ```
 
-Замер SM: `bench/gpubench.py`, память: `a100/memtest.py` (torch, внутри контейнера с CUDA;
-на время теста vLLM остановить).
+SM throughput: `bench/gpubench.py`; memory: `a100/memtest.py`; PCIe: `bench/pciebench.py` (torch,
+inside a CUDA container; stop vLLM for the test).
 
-## Эксперименты и откат
+## Experiments and rollback
 
-* `a100/cmp-reload.sh [параметр=значение …]` — перезагрузка модулей без ребута с любыми параметрами
-  (`cmp_lmr=0x28b` и т. п.) и снимок лога загрузки всех карт; vLLM останавливает и запускает обратно сам.
-* `a100/a100-ss-test.sh <0|1|2> [reset]` — то же только для A100-карты: `0` сток (задушена),
-  `1` рабочий режим, `2` контроль без записи SS.
-* `a100/memtest.py <устройство>` — тест всей памяти паттернами (в контейнере с CUDA).
-* Патчи `sec2-postbl-plm-ss-cfg.patch`, `booter-verify.patch`, `a100-ss-param.patch` не править
-  руками: `a100/mkpatches.py` перегенерирует их из pristine-тарбола, `a100/deploy.py` раскладывает
-  и валидирует (`--revert` — назад).
-* Откатить только SM-разблокировку: удалить `/etc/modprobe.d/cmpunlocker-a100-ss.conf`, `reboot` —
-  A100-карта снова грузится стоком (медленная, но рабочая).
+* `a100/cmp-reload.sh [param=value …]` — reload the modules without a reboot, with any parameters
+  (`cmp_lmr=0x28b` and so on), and snapshot the boot log of all cards; it stops vLLM and starts it
+  back itself.
+* `a100/a100-ss-test.sh <0|1|2> [reset]` — the same for the A100 card only: `0` stock (throttled),
+  `1` the working mode, `2` a control run without the SS write.
+* `a100/memtest.py <device>` — full-memory pattern test (in a CUDA container).
+* Do not edit the patches `sec2-postbl-plm-ss-cfg.patch`, `booter-verify.patch`,
+  `a100-ss-param.patch` by hand: `a100/mkpatches.py` regenerates them from the pristine tarball, and
+  `a100/deploy.py` lays them out and validates (`--revert` to go back).
+* To roll back only the SM unlock: delete `/etc/modprobe.d/cmpunlocker-a100-ss.conf`, `reboot` — the
+  A100 card boots stock again (slow, but working).
 
-## Что осталось
+## What remains
 
-* A100-карта работает на **x8**: лейны 8–15 (конденсаторы распаяны, но слот/PLX) — GT 520 занимает
-  x16-порт второго PLX.
-* P2P между картами не работает на этом железе (X99 + PLX, NCCL ходит через SHM) — история в
-  [host/HOST-README.md](host/HOST-README.md).
+* The A100 card runs at **x8**. This is a defect of the card itself — the AC-coupling capacitors on
+  the lanes of its edge connector; only lanes 0–7 work. Proven by swapping cards (2026-11-27/28): in
+  a slot where a CMP always trains x16 this card gives x4, and the CMP in its slot gives x16. The fix
+  is soldering, not software.
+* P2P between the cards does not work on this hardware (X99 + PLX, NCCL goes through SHM) — the story
+  is in [host/HOST-README.md](host/HOST-README.md).
 
-## Лицензия и благодарности
+## License and credits
 
-GPL-2.0 (см. `LICENSE`), как у базового проекта. Базовый проект и авторы фич —
-[amoghmunikote/cmpunlocker](https://github.com/amoghmunikote/cmpunlocker) (v0.5, коммит `17535a0`)
-и его [CREDITS.md](cmpunlocker/CREDITS.md). Идея volatile Gen3-ретрейна и нативного P2P —
-[scrameta/cmpunlocker_fused](https://github.com/scrameta/cmpunlocker_fused) (сам форк на этих картах
-не заработал). Сканирование фьюзов — [matstatman/gpcprobe](https://github.com/matstatman/gpcprobe).
-Драйвер — [NVIDIA/open-gpu-kernel-modules](https://github.com/NVIDIA/open-gpu-kernel-modules) 615.71.09.
+GPL-2.0 (see `LICENSE`), the same as the base project. The base project and the authors of its
+features are [amoghmunikote/cmpunlocker](https://github.com/amoghmunikote/cmpunlocker) (v0.5, commit
+`17535a0`) and its [CREDITS.md](cmpunlocker/CREDITS.md). The idea of the volatile Gen3 retrain and of
+native P2P is [scrameta/cmpunlocker_fused](https://github.com/scrameta/cmpunlocker_fused) (the fork
+itself never worked on these cards). Fuse scanning — [matstatman/gpcprobe](https://github.com/matstatman/gpcprobe).
+Driver — [NVIDIA/open-gpu-kernel-modules](https://github.com/NVIDIA/open-gpu-kernel-modules) 615.71.09.
